@@ -1,0 +1,146 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+
+    <title>DevDrop</title>
+
+    <link rel="stylesheet" href="/static/style.css">
+</head>
+
+<body>
+    <main class="page">
+        <section class="card">
+            <h1>DevDrop</h1>
+
+            <p class="subtitle">
+                Fast, private sharing on your local network.
+            </p>
+
+            <form class="pairing-form">
+                <input
+                    id="pair-code"
+                    type="text"
+                    inputmode="numeric"
+                    maxlength="11"
+                    placeholder="Enter pairing code"
+                    autocomplete="off"
+                >
+
+                <button type="submit">
+                    Connect
+                </button>
+            </form>
+
+            <p class="privacy">
+                No account. No cloud. Just your devices.
+            </p>
+        </section>
+
+
+        <section class="transfer-card hidden" id="transfer-screen">
+    <div class="transfer-header">
+        <h1>DevDrop</h1>
+        <p>Send something to your device.</p>
+    </div>
+
+    <div class="mode-switch">
+        <button class="mode active" data-mode="text" type="button">
+            Text
+        </button>
+
+        <button class="mode" data-mode="file" type="button">
+            File
+        </button>
+    </div>
+
+    <!-- TEXT -->
+
+    <div class="transfer-panel" id="text-panel">
+        <textarea
+            id="text-content"
+            placeholder="Paste something..."
+        ></textarea>
+    </div>
+
+    <!-- FILE -->
+
+    <div class="transfer-panel hidden" id="file-panel">
+        <div class="drop-zone" id="drop-zone">
+            <div class="empty-file-state" id="empty-file-state">
+                <p class="drop-title">Choose a file</p>
+
+                <div class="file-actions">
+                    <button id="upload-button" type="button">
+                        Upload
+                    </button>
+
+                    <button id="camera-button" type="button">
+                        Camera
+                    </button>
+                </div>
+
+                <p class="drop-hint">
+                    or drop a file here
+                </p>
+            </div>
+
+            <div class="file-preview hidden" id="file-preview">
+                <img
+                    id="image-preview"
+                    class="image-preview hidden"
+                    alt="Selected image"
+                >
+
+                <div class="file-info">
+                    <span id="file-name"></span>
+                    <span id="file-size"></span>
+                </div>
+
+                <button
+                    class="remove-file"
+                    id="remove-file"
+                    type="button"
+                    aria-label="Remove file"
+                >
+                    ×
+                </button>
+            </div>
+        </div>
+
+        <input
+            id="file-input"
+            type="file"
+            hidden
+        >
+
+        <input
+            id="camera-input"
+            type="file"
+            accept="image/*"
+            capture="environment"
+            hidden
+        >
+    </div>
+
+    <button class="send-button" id="send-button" type="button">
+        Send
+    </button>
+
+    <p class="transfer-status" id="transfer-status" aria-live="polite"></p>
+
+    <div class="connection-status">
+        <span></span>
+        Connected
+    </div>
+</section>
+
+        <footer>
+            DevDrop v0.1.0
+        </footer>
+    </main>
+
+    <script src="/static/app.js"></script>
+</body>
+</html>
