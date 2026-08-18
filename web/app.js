@@ -24,9 +24,10 @@ const sendButton = document.querySelector("#send-button");
 const transferStatus = document.querySelector("#transfer-status");
 
 let currentMode = "text";
-let selectedFile = null;
+let selectedFiles = [];
 let previewUrl = null;
 let sendResetTimer = null;
+let isCameraMode = false;
 
 pairingForm.addEventListener("submit", async (event) => {
     event.preventDefault();
@@ -80,8 +81,14 @@ modeButtons.forEach((button) => {
 
 uploadButton.addEventListener("click", () => fileInput.click());
 cameraButton.addEventListener("click", () => cameraInput.click());
-fileInput.addEventListener("change", () => selectFile(fileInput.files[0]));
-cameraInput.addEventListener("change", () => selectFile(cameraInput.files[0]));
+fileInput.addEventListener("change", () => {
+    isCameraMode = false;
+    selectFiles(fileInput.files);
+});
+cameraInput.addEventListener("change", () => {
+    isCameraMode = true;
+    selectFiles(cameraInput.files);
+});
 
 dropZone.addEventListener("dragover", (event) => {
     event.preventDefault();
@@ -93,7 +100,8 @@ dropZone.addEventListener("dragleave", () => dropZone.classList.remove("dragging
 dropZone.addEventListener("drop", (event) => {
     event.preventDefault();
     dropZone.classList.remove("dragging");
-    selectFile(event.dataTransfer.files[0]);
+    isCameraMode = false;
+    selectFiles(event.dataTransfer.files);
 });
 
 removeFileButton.addEventListener("click", clearSelectedFile);
@@ -137,14 +145,17 @@ async function sendText() {
 }
 
 async function sendFile() {
-    if (!selectedFile) {
+    if (!selectedFiles || selectedFiles.length === 0) {
         showTransferError("Choose a file first");
         return;
     }
 
     setSending();
     const formData = new FormData();
-    formData.append("file", selectedFile, selectedFile.name);
+    
+    for (let i = 0; i < selectedFiles.length; i++) {
+        formData.append("files", selectedFiles[i], selectedFiles[i].name);
+    }
 
     try {
         const response = await fetch("/api/upload", {
@@ -164,30 +175,50 @@ async function sendFile() {
     }
 }
 
-function selectFile(file) {
-    if (!file) return;
+function selectFiles(fileList) {
+    if (!fileList || fileList.length === 0) return;
 
     clearPreviewUrl();
-    selectedFile = file;
-    fileName.textContent = file.name;
-    fileSize.textContent = formatFileSize(file.size);
-    emptyFileState.classList.add("hidden");
-    filePreview.classList.remove("hidden");
-
-    if (file.type.startsWith("image/")) {
-        previewUrl = URL.createObjectURL(file);
-        imagePreview.src = previewUrl;
-        imagePreview.classList.remove("hidden");
-    } else {
-        imagePreview.removeAttribute("src");
-        imagePreview.classList.add("hidden");
+    selectedFiles = Array.from(fileList);
+    
+    // For camera mode, treat as single file even if multiple files somehow selected
+    if (isCameraMode && selectedFiles.length > 0) {
+        selectedFiles = selectedFiles.slice(0, 1);
     }
-
+    
+    updateFilePreviewDisplay();
     resetSendFeedback();
 }
 
+function updateFilePreviewDisplay() {
+    emptyFileState.classList.add("hidden");
+    filePreview.classList.remove("hidden");
+    
+    if (selectedFiles.length === 1) {
+        const file = selectedFiles[0];
+        fileName.textContent = file.name;
+        fileSize.textContent = formatFileSize(file.size);
+        
+        if (file.type.startsWith("image/")) {
+            previewUrl = URL.createObjectURL(file);
+            imagePreview.src = previewUrl;
+            imagePreview.classList.remove("hidden");
+        } else {
+            imagePreview.removeAttribute("src");
+            imagePreview.classList.add("hidden");
+        }
+    } else {
+        const totalSize = selectedFiles.reduce((sum, file) => sum + file.size, 0);
+        fileName.textContent = `${selectedFiles.length} files selected`;
+        fileSize.textContent = formatFileSize(totalSize);
+        imagePreview.removeAttribute("src");
+        imagePreview.classList.add("hidden");
+    }
+}
+
 function clearSelectedFile() {
-    selectedFile = null;
+    selectedFiles = [];
+    isCameraMode = false;
     fileInput.value = "";
     cameraInput.value = "";
     clearPreviewUrl();

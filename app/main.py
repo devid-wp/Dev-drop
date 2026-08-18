@@ -193,21 +193,34 @@ async def receive_text(request: TextRequest):
 
 
 @app.post("/api/upload")
-def receive_file(file: UploadFile = File(...)):
+def receive_file(files: list[UploadFile] = File(...)):
     session_dir = require_session_dir()
-    filename = safe_upload_name(file.filename)
-    file_path, output = open_unique_upload(session_dir, filename)
+    saved_files = []
 
-    try:
-        with output:
-            shutil.copyfileobj(file.file, output, length=1024 * 1024)
-    except Exception:
-        file_path.unlink(missing_ok=True)
-        raise HTTPException(status_code=500, detail="Could not save file")
+    for file in files:
+        filename = safe_upload_name(file.filename)
+        file_path, output = open_unique_upload(session_dir, filename)
 
-    cli_print()
-    cli_print("↓ File received")
-    cli_print(f"  Saved: {file_path.name}")
-    cli_print()
+        try:
+            with output:
+                shutil.copyfileobj(file.file, output, length=1024 * 1024)
+            saved_files.append(file_path.name)
+        except Exception:
+            file_path.unlink(missing_ok=True)
+            raise HTTPException(status_code=500, detail="Could not save file")
 
-    return {"success": True, "filename": file_path.name}
+    # Print CLI output
+    if len(saved_files) == 1:
+        cli_print()
+        cli_print("↓ File received")
+        cli_print(f"  Saved: {saved_files[0]}")
+        cli_print()
+    else:
+        cli_print()
+        cli_print(f"↓ {len(saved_files)} files received")
+        cli_print()
+        for filename in saved_files:
+            cli_print(f"  Saved: {filename}")
+        cli_print()
+
+    return {"success": True, "saved": saved_files}
