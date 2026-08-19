@@ -1,4 +1,6 @@
 import json
+import http.client
+import mimetypes
 import os
 import socket
 import sys
@@ -11,7 +13,16 @@ from typing import Any
 
 import uvicorn
 from PySide6.QtCore import QPropertyAnimation, QSize, Qt, QTimer, QUrl
-from PySide6.QtGui import QBrush, QColor, QDesktopServices, QPainter, QPixmap
+from PySide6.QtGui import (
+    QBrush,
+    QColor,
+    QDesktopServices,
+    QDragEnterEvent,
+    QDragMoveEvent,
+    QDropEvent,
+    QPainter,
+    QPixmap,
+)
 from PySide6.QtWidgets import (
     QApplication,
     QDialog,
@@ -25,6 +36,7 @@ from PySide6.QtWidgets import (
     QMessageBox,
     QPushButton,
     QSpinBox,
+    QListWidget,
     QVBoxLayout,
     QWidget,
 )
@@ -200,6 +212,145 @@ class StatusDot(QWidget):
         painter.end()
 
 
+class FileDropArea(QFrame):
+    def __init__(self, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self.setObjectName("dropArea")
+        self.setAcceptDrops(True)
+        self.setMinimumHeight(132)
+        self.selected_files: list[Path] = []
+
+        self.title = QLabel("Drop files here")
+        self.title.setObjectName("dropTitle")
+        self.hint = QLabel("Files will be added to the current session")
+        self.hint.setObjectName("muted")
+        self.file_list = QListWidget()
+        self.file_list.setObjectName("fileList")
+        self.file_list.setMaximumHeight(92)
+        self.file_list.hide()
+
+        self.choose_button = QPushButton("Choose files")
+        self.send_button = QPushButton("Send files")
+        self.choose_button.clicked.connect(self.choose_files)
+        self.send_button.clicked.connect(self.send_files)
+        self.send_button.setEnabled(False)
+
+        buttons = QHBoxLayout()
+        buttons.addWidget(self.choose_button)
+        buttons.addWidget(self.send_button)
+        buttons.addStretch(1)
+
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(16, 14, 16, 14)
+        layout.setSpacing(8)
+        layout.addWidget(self.title)
+        layout.addWidget(self.hint)
+        layout.addWidget(self.file_list)
+        layout.addLayout(buttons)
+
+    def dragEnterEvent(self, event: QDragEnterEvent) -> None:
+        if self._has_local_files(event.mimeData()):
+            self._set_dragging(True)
+            event.acceptProposedAction()
+        else:
+            event.ignore()
+
+    def dragMoveEvent(self, event: QDragMoveEvent) -> None:
+        if self._has_local_files(event.mimeData()):
+            self._set_dragging(True)
+            event.acceptProposedAction()
+        else:
+            event.ignore()
+
+    def dragLeaveEvent(self, _event) -> None:  # type: ignore[override]
+        self._set_dragging(False)
+
+    def dropEvent(self, event: QDropEvent) -> None:
+        self._set_dragging(False)
+        paths = [Path(url.toLocalFile()) for url in event.mimeData().urls()]
+        self.set_files(paths)
+        event.acceptProposedAction()
+
+    def choose_files(self) -> None:
+        files, _ = QFileDialog.getOpenFileNames(self, "Choose files")
+        if files:
+            self.set_files([Path(file) for file in files])
+
+    def set_files(self, files: list[Path]) -> None:
+        self.selected_files = [file for file in files if file.is_file()]
+        self.file_list.clear()
+        for file in self.selected_files:
+            self.file_list.addItem(str(file))
+        has_files = bool(self.selected_files)
+        self.file_list.setVisible(has_files)
+        self.send_button.setEnabled(has_files)
+        self.title.setText(
+            f"{len(self.selected_files)} file(s) selected" if has_files else "Drop files here"
+        )
+        self.hint.setText(
+            "Review the selection, then send files"
+            if has_files
+            else "Files will be added to the current session"
+        )
+
+    def send_files(self) -> None:
+        if not self.selected_files:
+            return
+        try:
+            saved = self._upload_files(self.selected_files)
+        except (OSError, ValueError, http.client.HTTPException) as error:
+            QMessageBox.warning(self, "Could not send files", str(error))
+            return
+        self.set_files([])
+        self.hint.setText(f"Sent {len(saved)} file(s)")
+
+    def _upload_files(self, files: list[Path]) -> list[str]:
+        boundary = f"----DevDrop{os.urandom(12).hex()}"
+        connection = http.client.HTTPConnection("127.0.0.1", self.window().active_port)
+        connection.putrequest("POST", "/api/upload")
+        connection.putheader("Content-Type", f"multipart/form-data; boundary={boundary}")
+        connection.putheader("Transfer-Encoding", "chunked")
+        connection.endheaders()
+        try:
+            for file in files:
+                filename = file.name.encode("utf-8").decode("latin-1", "replace")
+                content_type = mimetypes.guess_type(file.name)[0] or "application/octet-stream"
+                header = (
+                    f"--{boundary}\r\n"
+                    f'Content-Disposition: form-data; name="files"; filename="{filename}"\r\n'
+                    f"Content-Type: {content_type}\r\n\r\n"
+                ).encode("utf-8")
+                self._send_chunk(connection, header)
+                with file.open("rb") as source:
+                    while chunk := source.read(1024 * 1024):
+                        self._send_chunk(connection, chunk)
+                self._send_chunk(connection, b"\r\n")
+            self._send_chunk(connection, f"--{boundary}--\r\n".encode())
+            response = connection.getresponse()
+            payload = json.loads(response.read().decode("utf-8"))
+            if response.status >= 400:
+                raise ValueError(payload.get("detail", "Upload failed"))
+            return [str(name) for name in payload.get("saved", [])]
+        finally:
+            connection.close()
+
+    @staticmethod
+    def _send_chunk(connection: http.client.HTTPConnection, data: bytes) -> None:
+        connection.send(f"{len(data):X}\r\n".encode() + data + b"\r\n")
+
+    @staticmethod
+    def _has_local_files(mime_data) -> bool:
+        return any(
+            url.isLocalFile() and Path(url.toLocalFile()).is_file()
+            for url in mime_data.urls()
+        )
+
+    def _set_dragging(self, dragging: bool) -> None:
+        self.setProperty("dragging", dragging)
+        self.style().unpolish(self)
+        self.style().polish(self)
+
+
 class SettingsDialog(QDialog):
     def __init__(self, config: DevDropConfig, parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -325,6 +476,7 @@ class MainWindow(QMainWindow):
         self.open_folder_button = QPushButton("Open session folder")
         self.settings_button = QPushButton("Settings")
         self.copy_address_button = QPushButton("Copy")
+        self.drop_area = FileDropArea(self)
         self.regenerate_button.clicked.connect(self.regenerate_code)
         self.open_folder_button.clicked.connect(self.open_session_folder)
         self.settings_button.clicked.connect(self.open_settings)
@@ -378,6 +530,9 @@ class MainWindow(QMainWindow):
         actions.addWidget(self.open_folder_button)
         actions.addWidget(self.settings_button)
 
+        transfer = self._section("Send files")
+        transfer.addWidget(self.drop_area)
+
         session = self._section("Session")
         session.addLayout(self._row("Current folder", self.session_value))
         session.addLayout(self._row("Received files", self.files_value))
@@ -392,6 +547,8 @@ class MainWindow(QMainWindow):
         layout.addWidget(self._line())
         layout.addLayout(connection_area)
         layout.addLayout(actions)
+        layout.addWidget(self._line())
+        layout.addLayout(transfer)
         layout.addWidget(self._line())
         layout.addLayout(session)
         layout.addStretch(1)
@@ -701,6 +858,25 @@ QFrame#qrPanel {
     background: #141416;
     border: 1px solid #2b2b30;
     border-radius: 8px;
+}
+QFrame#dropArea {
+    background: #141416;
+    border: 1px dashed #454550;
+    border-radius: 8px;
+}
+QFrame#dropArea[dragging="true"] {
+    background: #211c2b;
+    border: 1px solid #b98cff;
+}
+QLabel#dropTitle {
+    color: #f2f2f2;
+    font-size: 16px;
+    font-weight: 600;
+}
+QListWidget#fileList {
+    background: #19191c;
+    border: 1px solid #2b2b30;
+    color: #f2f2f2;
 }
 QFrame#separator {
     color: #2b2b30;
