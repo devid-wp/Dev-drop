@@ -23,6 +23,8 @@ SESSION_DIR: Path | None = None
 sessions: dict[str, float] = {}
 pairing_code = ""
 pairing_created_at = 0.0
+session_stats_cache: tuple[Path, int, int] | None = None
+TRANSFER_COPY_BUFFER_SIZE = 4 * 1024 * 1024
 
 
 class PairRequest(BaseModel):
@@ -31,6 +33,18 @@ class PairRequest(BaseModel):
 
 class TextRequest(BaseModel):
     content: str
+
+
+def cleanup_expired_sessions() -> None:
+    now = time.time()
+    expired = [
+        token
+        for token, created_at in sessions.items()
+        if now - created_at >= SESSION_LIFETIME
+    ]
+
+    for token in expired:
+        sessions.pop(token, None)
 
 
 def cli_print(message: str = "") -> None:
@@ -69,6 +83,10 @@ def generate_pairing_code() -> str:
     return pairing_code
 
 
+def regenerate_pairing_code() -> str:
+    return generate_pairing_code()
+
+
 def pairing_is_valid() -> bool:
     return bool(pairing_code) and time.time() - pairing_created_at < PAIRING_LIFETIME
 
@@ -82,6 +100,12 @@ def require_session_dir() -> Path:
 
     SESSION_DIR.mkdir(parents=True, exist_ok=True)
     return SESSION_DIR.resolve()
+
+
+def invalidate_session_stats() -> None:
+    global session_stats_cache
+
+    session_stats_cache = None
 
 
 def safe_upload_name(filename: str | None) -> str:
@@ -118,6 +142,29 @@ def open_unique_upload(session_dir: Path, filename: str):
             number += 1
 
 
+def session_stats() -> dict[str, int]:
+    global session_stats_cache
+
+    session_dir = require_session_dir()
+    if session_stats_cache is not None and session_stats_cache[0] == session_dir:
+        return {
+            "received_files": session_stats_cache[1],
+            "received_size": session_stats_cache[2],
+        }
+
+    files = [path for path in session_dir.iterdir() if path.is_file()]
+    stats = {
+        "received_files": len(files),
+        "received_size": sum(path.stat().st_size for path in files),
+    }
+    session_stats_cache = (
+        session_dir,
+        stats["received_files"],
+        stats["received_size"],
+    )
+    return stats
+
+
 generate_pairing_code()
 
 
@@ -131,6 +178,29 @@ async def health():
     return {"status": "ok", "app": "DevDrop"}
 
 
+@app.get("/api/status")
+async def status(request: Request):
+    if not _is_local_request(request):
+        raise HTTPException(status_code=403, detail="Management endpoint is local-only")
+
+    if not pairing_is_valid():
+        generate_pairing_code()
+
+    cleanup_expired_sessions()
+    stats = session_stats()
+    session_dir = require_session_dir()
+
+    return {
+        "app": "DevDrop",
+        "version": "0.1.1",
+        "pairing_code": pairing_code,
+        "pairing_expires_in": max(0, int(PAIRING_LIFETIME - (time.time() - pairing_created_at))),
+        "connected_devices": len(sessions),
+        "session_path": str(session_dir),
+        **stats,
+    }
+
+
 @app.get("/api/pairing-code")
 async def get_pairing_code():
     if not pairing_is_valid():
@@ -139,6 +209,18 @@ async def get_pairing_code():
     return {
         "code": pairing_code,
         "expires_in": max(0, int(PAIRING_LIFETIME - (time.time() - pairing_created_at))),
+    }
+
+
+@app.post("/api/regenerate-pairing-code")
+async def post_regenerate_pairing_code(request: Request):
+    if not _is_local_request(request):
+        raise HTTPException(status_code=403, detail="Management endpoint is local-only")
+
+    code = regenerate_pairing_code()
+    return {
+        "code": code,
+        "expires_in": PAIRING_LIFETIME,
     }
 
 
@@ -180,6 +262,7 @@ async def receive_text(request: TextRequest):
         try:
             with file_path.open("x", encoding="utf-8") as output:
                 output.write(content)
+            invalidate_session_stats()
             break
         except FileExistsError:
             number += 1
@@ -203,24 +286,25 @@ def receive_file(files: list[UploadFile] = File(...)):
 
         try:
             with output:
-                shutil.copyfileobj(file.file, output, length=1024 * 1024)
+                shutil.copyfileobj(
+                    file.file,
+                    output,
+                    length=TRANSFER_COPY_BUFFER_SIZE,
+                )
+            invalidate_session_stats()
             saved_files.append(file_path.name)
         except Exception:
             file_path.unlink(missing_ok=True)
             raise HTTPException(status_code=500, detail="Could not save file")
 
-    # Print CLI output
     if len(saved_files) == 1:
-        cli_print()
-        cli_print("↓ File received")
-        cli_print(f"  Saved: {saved_files[0]}")
-        cli_print()
+        cli_print(f"↓ File received: {saved_files[0]}")
     else:
-        cli_print()
         cli_print(f"↓ {len(saved_files)} files received")
-        cli_print()
-        for filename in saved_files:
-            cli_print(f"  Saved: {filename}")
-        cli_print()
 
     return {"success": True, "saved": saved_files}
+
+
+def _is_local_request(request: Request) -> bool:
+    host = request.client.host if request.client else ""
+    return host in {"127.0.0.1", "::1", "localhost"}

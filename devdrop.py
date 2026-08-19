@@ -1,36 +1,15 @@
 import shutil
-import socket
 import sys
-from datetime import datetime
 from pathlib import Path
 
 import uvicorn
 
+from app.config import DEFAULT_PORT
+from app.runtime import HOST, create_session_folder, get_local_ip
 import app.main as backend
 
 
-HOST = "0.0.0.0"
-PORT = 8765
-
-
-def get_local_ip() -> str:
-    sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-
-    try:
-        sock.connect(("8.8.8.8", 80))
-        return sock.getsockname()[0]
-    except OSError:
-        return "127.0.0.1"
-    finally:
-        sock.close()
-
-
-def create_session_folder() -> Path:
-    root = Path.home() / "DevDrop"
-    timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
-    session = root / f"session-{timestamp}"
-    session.mkdir(parents=True, exist_ok=False)
-    return session
+PORT = DEFAULT_PORT
 
 
 def format_code(code: str) -> str:
@@ -81,7 +60,7 @@ def main() -> None:
     if hasattr(sys.stdout, "reconfigure"):
         sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 
-    session_dir = create_session_folder()
+    session_dir = create_session_folder(Path.home() / "DevDrop")
     backend.SESSION_DIR = session_dir
     ip = get_local_ip()
     print_banner(ip, session_dir)
