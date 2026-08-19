@@ -22,12 +22,55 @@ const imagePreview = document.querySelector("#image-preview");
 const removeFileButton = document.querySelector("#remove-file");
 const sendButton = document.querySelector("#send-button");
 const transferStatus = document.querySelector("#transfer-status");
+const discoveredServers = document.querySelector("#discovered-servers");
+const serverList = document.querySelector("#server-list");
 
 let currentMode = "text";
 let selectedFiles = [];
 let previewUrl = null;
 let sendResetTimer = null;
 let isCameraMode = false;
+
+discoverServers();
+
+async function discoverServers() {
+    try {
+        const response = await fetch("/api/discover", { cache: "no-store" });
+        if (!response.ok) return;
+
+        const data = await response.json();
+        const servers = Array.isArray(data.servers) ? data.servers : [];
+        serverList.replaceChildren();
+
+        servers.forEach((server) => {
+            const button = document.createElement("button");
+            button.className = "discovered-server";
+            button.type = "button";
+            button.innerHTML = `<strong>${escapeHtml(server.name || "DevDrop")}</strong>`
+                + `<span>${escapeHtml(server.ip || "Unknown IP")}</span>`
+                + `<em>${escapeHtml(server.status || "Available")}</em>`;
+            button.addEventListener("click", () => {
+                const url = new URL(server.url, window.location.href);
+                window.location.href = url.href;
+            });
+            serverList.appendChild(button);
+        });
+
+        discoveredServers.hidden = servers.length === 0;
+    } catch (_error) {
+        discoveredServers.hidden = true;
+    }
+}
+
+function escapeHtml(value) {
+    return String(value).replace(/[&<>'"]/g, (character) => ({
+        "&": "&amp;",
+        "<": "&lt;",
+        ">": "&gt;",
+        "'": "&#39;",
+        '"': "&quot;",
+    }[character]));
+}
 
 pairingForm.addEventListener("submit", async (event) => {
     event.preventDefault();

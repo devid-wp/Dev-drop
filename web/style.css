@@ -89,6 +89,55 @@ h1 {
     gap: 16px;
 }
 
+.discovered-servers {
+    margin-top: 28px;
+    text-align: left;
+}
+
+.discovered-heading {
+    margin: 0 0 10px;
+    color: var(--muted);
+    font-size: 14px;
+}
+
+.discovered-server {
+    display: grid;
+    grid-template-columns: 1fr auto;
+    grid-template-rows: auto auto;
+    gap: 3px 12px;
+    height: auto;
+    min-height: 60px;
+    padding: 10px 14px;
+    text-align: left;
+}
+
+.discovered-server strong,
+.discovered-server span,
+.discovered-server em {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.discovered-server strong {
+    grid-column: 1;
+}
+
+.discovered-server span {
+    grid-column: 1;
+    color: var(--muted);
+    font-size: 14px;
+}
+
+.discovered-server em {
+    grid-column: 2;
+    grid-row: 1 / span 2;
+    align-self: center;
+    color: #86efac;
+    font-size: 13px;
+    font-style: normal;
+}
+
 input,
 button {
     width: 100%;

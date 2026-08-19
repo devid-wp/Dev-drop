@@ -62,6 +62,7 @@ def main() -> None:
 
     session_dir = create_session_folder(Path.home() / "DevDrop")
     backend.SESSION_DIR = session_dir
+    backend.SERVER_PORT = PORT
     ip = get_local_ip()
     print_banner(ip, session_dir)
 

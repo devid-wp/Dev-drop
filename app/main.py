@@ -1,13 +1,18 @@
+import asyncio
+import json
 import secrets
 import shutil
 import sys
 import time
+from datetime import datetime, timezone
 from pathlib import Path
 
 from fastapi import FastAPI, File, HTTPException, Request, UploadFile
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
+
+from app.discovery import DiscoveryService
 
 
 BASE_DIR = Path(__file__).resolve().parent.parent
@@ -20,6 +25,9 @@ SESSION_LIFETIME = 60 * 60
 PAIRING_LIFETIME = 5 * 60
 
 SESSION_DIR: Path | None = None
+HISTORY_PATH: Path | None = None
+SERVER_PORT = 8765
+DISCOVERY_SERVICE: DiscoveryService | None = None
 sessions: dict[str, float] = {}
 pairing_code = ""
 pairing_created_at = 0.0
@@ -102,6 +110,49 @@ def require_session_dir() -> Path:
     return SESSION_DIR.resolve()
 
 
+def history_path() -> Path:
+    if HISTORY_PATH is not None:
+        HISTORY_PATH.parent.mkdir(parents=True, exist_ok=True)
+        return HISTORY_PATH
+    return require_session_dir() / "transfer_history.json"
+
+
+def load_transfer_history() -> list[dict[str, object]]:
+    path = history_path()
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return []
+    if not isinstance(data, list):
+        return []
+    return [item for item in data if isinstance(item, dict)][-20:]
+
+
+def save_transfer_history(history: list[dict[str, object]]) -> None:
+    path = history_path()
+    temporary_path = path.with_suffix(".tmp")
+    temporary_path.write_text(
+        json.dumps(history[-20:], ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
+    temporary_path.replace(path)
+
+
+def record_transfers(files: list[tuple[str, int]], sender_ip: str) -> None:
+    history = load_transfer_history()
+    timestamp = datetime.now(timezone.utc).isoformat()
+    history.extend(
+        {
+            "filename": filename,
+            "size": size,
+            "timestamp": timestamp,
+            "sender_ip": sender_ip,
+        }
+        for filename, size in files
+    )
+    save_transfer_history(history)
+
+
 def invalidate_session_stats() -> None:
     global session_stats_cache
 
@@ -168,6 +219,20 @@ def session_stats() -> dict[str, int]:
 generate_pairing_code()
 
 
+@app.on_event("startup")
+async def start_discovery() -> None:
+    global DISCOVERY_SERVICE
+
+    DISCOVERY_SERVICE = DiscoveryService(SERVER_PORT)
+    DISCOVERY_SERVICE.start()
+
+
+@app.on_event("shutdown")
+async def stop_discovery() -> None:
+    if DISCOVERY_SERVICE is not None:
+        DISCOVERY_SERVICE.stop()
+
+
 @app.get("/")
 async def index():
     return FileResponse(WEB_DIR / "index.html")
@@ -176,6 +241,13 @@ async def index():
 @app.get("/api/health")
 async def health():
     return {"status": "ok", "app": "DevDrop"}
+
+
+@app.get("/api/discover")
+async def discover_servers():
+    if DISCOVERY_SERVICE is None:
+        return {"servers": []}
+    return {"servers": await asyncio.to_thread(DISCOVERY_SERVICE.discover)}
 
 
 @app.get("/api/status")
@@ -199,6 +271,21 @@ async def status(request: Request):
         "session_path": str(session_dir),
         **stats,
     }
+
+
+@app.get("/api/history")
+async def transfer_history(request: Request):
+    if not _is_local_request(request):
+        raise HTTPException(status_code=403, detail="Management endpoint is local-only")
+    return {"transfers": load_transfer_history()}
+
+
+@app.delete("/api/history")
+async def clear_transfer_history(request: Request):
+    if not _is_local_request(request):
+        raise HTTPException(status_code=403, detail="Management endpoint is local-only")
+    save_transfer_history([])
+    return {"success": True}
 
 
 @app.get("/api/pairing-code")
@@ -276,9 +363,10 @@ async def receive_text(request: TextRequest):
 
 
 @app.post("/api/upload")
-def receive_file(files: list[UploadFile] = File(...)):
+def receive_file(request: Request, files: list[UploadFile] = File(...)):
     session_dir = require_session_dir()
     saved_files = []
+    transfer_details = []
 
     for file in files:
         filename = safe_upload_name(file.filename)
@@ -293,9 +381,13 @@ def receive_file(files: list[UploadFile] = File(...)):
                 )
             invalidate_session_stats()
             saved_files.append(file_path.name)
+            transfer_details.append((file_path.name, file_path.stat().st_size))
         except Exception:
             file_path.unlink(missing_ok=True)
             raise HTTPException(status_code=500, detail="Could not save file")
+
+    sender_ip = request.client.host if request and request.client else "unknown"
+    record_transfers(transfer_details, sender_ip)
 
     if len(saved_files) == 1:
         cli_print(f"↓ File received: {saved_files[0]}")

@@ -7,6 +7,7 @@ import sys
 import threading
 import urllib.error
 import urllib.request
+from datetime import datetime
 from io import BytesIO
 from pathlib import Path
 from typing import Any
@@ -68,6 +69,12 @@ class BackendClient:
     def health(self) -> dict[str, Any]:
         return self._request("GET", "/api/health")
 
+    def get_history(self) -> dict[str, Any]:
+        return self._request("GET", "/api/history")
+
+    def clear_history(self) -> dict[str, Any]:
+        return self._request("DELETE", "/api/history")
+
     def _request(self, method: str, path: str) -> dict[str, Any]:
         request = urllib.request.Request(f"{self.base_url}{path}", method=method)
         with urllib.request.urlopen(request, timeout=REQUEST_TIMEOUT_SECONDS) as response:
@@ -95,6 +102,8 @@ class BackendManager:
 
         self.session_dir = create_session_folder(self.config.session_root)
         backend.SESSION_DIR = self.session_dir
+        backend.HISTORY_PATH = self.config.session_root / "transfer_history.json"
+        backend.SERVER_PORT = self.config.port
 
         server_config = uvicorn.Config(
             backend.app,
@@ -471,6 +480,11 @@ class MainWindow(QMainWindow):
         )
         self.settings_note.setObjectName("muted")
         self.settings_note.setWordWrap(True)
+        self.history_list = QListWidget()
+        self.history_list.setObjectName("historyList")
+        self.history_list.setMinimumHeight(110)
+        self.clear_history_button = QPushButton("Clear history")
+        self.clear_history_button.clicked.connect(self.clear_history)
 
         self.regenerate_button = QPushButton("Regenerate code")
         self.open_folder_button = QPushButton("Open session folder")
@@ -539,6 +553,10 @@ class MainWindow(QMainWindow):
         session.addLayout(self._row("Received size", self.size_value))
         session.addWidget(self.settings_note)
 
+        history = self._section("Recent transfers")
+        history.addWidget(self.history_list)
+        history.addWidget(self.clear_history_button, 0, Qt.AlignmentFlag.AlignLeft)
+
         root = QWidget()
         layout = QVBoxLayout(root)
         layout.setContentsMargins(34, 30, 34, 30)
@@ -551,6 +569,7 @@ class MainWindow(QMainWindow):
         layout.addLayout(transfer)
         layout.addWidget(self._line())
         layout.addLayout(session)
+        layout.addLayout(history)
         layout.addStretch(1)
         self.setCentralWidget(root)
 
@@ -644,6 +663,7 @@ class MainWindow(QMainWindow):
 
         lan_address = f"http://{get_local_ip()}:{self.active_port}"
         self._update_qr_code(lan_address)
+        self.refresh_history()
         connected_devices = int(data.get("connected_devices") or 0)
         status_text = (
             "1 device connected"
@@ -695,6 +715,31 @@ class MainWindow(QMainWindow):
         self.code_value.setText(format_code(str(data.get("code") or "")))
         self.refresh_status()
         self._show_toast("Pairing code regenerated")
+
+    def refresh_history(self) -> None:
+        try:
+            data = self.client.get_history()
+        except (OSError, urllib.error.URLError, TimeoutError, json.JSONDecodeError):
+            return
+
+        self.history_list.clear()
+        transfers = data.get("transfers") or []
+        for transfer in reversed(transfers[-20:]):
+            filename = str(transfer.get("filename") or "upload.bin")
+            size = format_bytes(int(transfer.get("size") or 0))
+            sender_ip = str(transfer.get("sender_ip") or "unknown")
+            timestamp = format_history_timestamp(str(transfer.get("timestamp") or ""))
+            self.history_list.addItem(f"{filename}\n{size}    {sender_ip}    {timestamp}")
+        self.clear_history_button.setEnabled(bool(transfers))
+
+    def clear_history(self) -> None:
+        try:
+            self.client.clear_history()
+        except (OSError, urllib.error.URLError, TimeoutError, json.JSONDecodeError) as error:
+            QMessageBox.warning(self, "Could not clear history", str(error))
+            return
+        self.refresh_history()
+        self._show_toast("Transfer history cleared")
 
     def open_session_folder(self) -> None:
         if not self.current_session_path:
@@ -812,6 +857,14 @@ def format_bytes(size: int) -> str:
     return f"{size} B"
 
 
+def format_history_timestamp(timestamp: str) -> str:
+    try:
+        value = datetime.fromisoformat(timestamp.replace("Z", "+00:00"))
+    except ValueError:
+        return timestamp or "-"
+    return value.astimezone().strftime("%H:%M")
+
+
 APP_STYLES = """
 QMainWindow, QDialog {
     background: #0d0d0f;
@@ -875,6 +928,11 @@ QLabel#dropTitle {
 }
 QListWidget#fileList {
     background: #19191c;
+    border: 1px solid #2b2b30;
+    color: #f2f2f2;
+}
+QListWidget#historyList {
+    background: #141416;
     border: 1px solid #2b2b30;
     color: #f2f2f2;
 }
