@@ -47,7 +47,7 @@ from PySide6.QtWidgets import (
 )
 
 from app.config import DevDropConfig, load_config, save_config
-from app.runtime import HOST, create_session_folder, get_local_ip
+from app.runtime import HOST, create_session_folder, get_local_ip, ensure_firewall_rule, get_network_profile
 import app.main as backend
 
 
@@ -581,6 +581,13 @@ class MainWindow(QMainWindow):
         connection.addLayout(self._code_row())
         connection.addLayout(self._status_row())
 
+        # Network profile indicator
+        self.network_value = QLabel("-")
+        self.network_value.setObjectName("rowValue")
+        self.network_value.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+        self.network_value.setWordWrap(True)
+        connection.addLayout(self._row("Network", self.network_value))
+
         qr_panel = QFrame()
         qr_panel.setObjectName("qrPanel")
         # Reserve a dedicated QR column: fixed width, but the height follows its
@@ -758,6 +765,19 @@ class MainWindow(QMainWindow):
 
         lan_address = f"http://{get_local_ip()}:{self.active_port}"
         self._update_qr_code(lan_address)
+
+        # Network profile (Public/Private/Domain) - important for LAN visibility
+        net_profile = get_network_profile()
+        if net_profile:
+            self.network_value.setText(net_profile)
+            # Highlight if Public (blocks LAN by default)
+            if net_profile == "Public":
+                self.network_value.setStyleSheet("color: #ef4444;")
+            else:
+                self.network_value.setStyleSheet("color: #22c55e;")
+        else:
+            self.network_value.setText("Unknown")
+            self.network_value.setStyleSheet("color: #73737d;")
 
         received_files = int(data.get("received_files") or 0)
         if received_files != self._last_history_files:
