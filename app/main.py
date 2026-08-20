@@ -104,15 +104,26 @@ def pairing_is_valid() -> bool:
     return bool(pairing_code) and time.time() - pairing_created_at < PAIRING_LIFETIME
 
 
+# Cached resolved session dir. `mkdir` + `resolve` are syscalls that used to
+# run on every management poll; resolved once and reused until SESSION_DIR changes.
+_resolved_session_dir: Path | None = None
+_session_dir_source: Path | None = None
+
+
 def require_session_dir() -> Path:
+    global _resolved_session_dir, _session_dir_source
+
     if SESSION_DIR is None:
         raise HTTPException(
             status_code=500,
             detail="Session directory is not initialized",
         )
 
-    SESSION_DIR.mkdir(parents=True, exist_ok=True)
-    return SESSION_DIR.resolve()
+    if _resolved_session_dir is None or _session_dir_source != SESSION_DIR:
+        SESSION_DIR.mkdir(parents=True, exist_ok=True)
+        _resolved_session_dir = SESSION_DIR.resolve()
+        _session_dir_source = SESSION_DIR
+    return _resolved_session_dir
 
 
 def history_path() -> Path:
