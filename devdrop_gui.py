@@ -315,7 +315,9 @@ class FileDropArea(QFrame):
 
     def _upload_files(self, files: list[Path]) -> list[str]:
         boundary = f"----DevDrop{os.urandom(12).hex()}"
-        connection = http.client.HTTPConnection("127.0.0.1", self.window().active_port)
+        connection = http.client.HTTPConnection(
+            "127.0.0.1", self.window().active_port, timeout=60
+        )
         connection.putrequest("POST", "/api/upload")
         connection.putheader("Content-Type", f"multipart/form-data; boundary={boundary}")
         connection.putheader("Transfer-Encoding", "chunked")
@@ -335,6 +337,9 @@ class FileDropArea(QFrame):
                         self._send_chunk(connection, chunk)
                 self._send_chunk(connection, b"\r\n")
             self._send_chunk(connection, f"--{boundary}--\r\n".encode())
+            # Terminating zero-length chunk: required to close a chunked body,
+            # otherwise the server waits forever and the response never arrives.
+            connection.send(b"0\r\n\r\n")
             response = connection.getresponse()
             payload = json.loads(response.read().decode("utf-8"))
             if response.status >= 400:
