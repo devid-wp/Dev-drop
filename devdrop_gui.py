@@ -30,12 +30,15 @@ from PySide6.QtWidgets import (
     QFileDialog,
     QFormLayout,
     QFrame,
+    QGridLayout,
     QHBoxLayout,
     QLabel,
     QLineEdit,
     QMainWindow,
     QMessageBox,
     QPushButton,
+    QScrollArea,
+    QSizePolicy,
     QSpinBox,
     QListWidget,
     QVBoxLayout,
@@ -532,7 +535,10 @@ class MainWindow(QMainWindow):
 
         qr_panel = QFrame()
         qr_panel.setObjectName("qrPanel")
-        qr_panel.setFixedSize(236, 300)
+        # Reserve a dedicated QR column: fixed width, but the height follows its
+        # content (heading + QR image + address) so it never overflows its row.
+        qr_panel.setFixedWidth(236)
+        qr_panel.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Preferred)
         qr_panel_layout = QVBoxLayout(qr_panel)
         qr_panel_layout.setContentsMargins(16, 16, 16, 16)
         qr_panel_layout.setSpacing(12)
@@ -544,10 +550,13 @@ class MainWindow(QMainWindow):
         qr_panel_layout.addWidget(self.qr_code_value, 0, Qt.AlignmentFlag.AlignCenter)
         qr_panel_layout.addWidget(self.qr_address_value)
 
-        connection_area = QHBoxLayout()
-        connection_area.setSpacing(24)
-        connection_area.addLayout(connection, 1)
-        connection_area.addWidget(qr_panel, 0, Qt.AlignmentFlag.AlignTop)
+        # Grid gives the QR its own isolated cell; the connection details take
+        # the remaining width (column 0 stretches). Neither can overlap.
+        connection_area = QGridLayout()
+        connection_area.setHorizontalSpacing(24)
+        connection_area.setColumnStretch(0, 1)
+        connection_area.addLayout(connection, 0, 0)
+        connection_area.addWidget(qr_panel, 0, 1, Qt.AlignmentFlag.AlignTop)
 
         actions = QHBoxLayout()
         actions.addWidget(self.regenerate_button)
@@ -567,8 +576,13 @@ class MainWindow(QMainWindow):
         history.addWidget(self.history_list)
         history.addWidget(self.clear_history_button, 0, Qt.AlignmentFlag.AlignLeft)
 
-        root = QWidget()
-        layout = QVBoxLayout(root)
+        # The content sits inside a scroll area so that, when the window is
+        # smaller than the content's natural size, it scrolls instead of the
+        # layout compressing widgets over one another. When the window is
+        # larger, the container fills the viewport as before.
+        container = QWidget()
+        container.setObjectName("contentRoot")
+        layout = QVBoxLayout(container)
         layout.setContentsMargins(34, 30, 34, 30)
         layout.setSpacing(24)
         layout.addLayout(header)
@@ -581,7 +595,15 @@ class MainWindow(QMainWindow):
         layout.addLayout(session)
         layout.addLayout(history)
         layout.addStretch(1)
-        self.setCentralWidget(root)
+
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QFrame.Shape.NoFrame)
+        # Text wraps (all labels use wordWrap), so horizontal scrolling is never
+        # needed; keep content within the window width and scroll only vertically.
+        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        scroll.setWidget(container)
+        self.setCentralWidget(scroll)
 
     def _section(self, heading: str) -> QVBoxLayout:
         label = QLabel(heading)
@@ -1013,6 +1035,29 @@ QLineEdit:focus, QSpinBox:focus {
 }
 QMessageBox {
     background: #141416;
+}
+QScrollArea {
+    background: #0d0d0f;
+    border: none;
+}
+QScrollBar:vertical {
+    background: #0d0d0f;
+    width: 12px;
+    margin: 0;
+}
+QScrollBar::handle:vertical {
+    background: #2b2b30;
+    border-radius: 6px;
+    min-height: 32px;
+}
+QScrollBar::handle:vertical:hover {
+    background: #454550;
+}
+QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {
+    height: 0;
+}
+QScrollBar::add-page:vertical, QScrollBar::sub-page:vertical {
+    background: transparent;
 }
 """
 

@@ -23,6 +23,7 @@ class GUITests(unittest.TestCase):
 
         cls.app = QApplication.instance() or QApplication(sys.argv)
         cls.app.setApplicationName("DevDropTest")
+        cls._created: list = []
 
         # Prevent the window from starting a real backend or polling the network.
         cls.patchers = [
@@ -39,40 +40,52 @@ class GUITests(unittest.TestCase):
         if getattr(cls, "patchers_active", False):
             for patcher in cls.patchers:
                 patcher.stop()
+        # Deterministically release the Qt widgets instead of leaving them to
+        # Python's garbage collector. Otherwise the wrapped C++ objects are
+        # freed at an arbitrary later point (e.g. while another test module's
+        # uvicorn thread is running) and can crash the whole test process.
+        for widget in cls._created:
+            widget.close()
+            widget.deleteLater()
+        cls.app.processEvents()
+        cls._created.clear()
+        import gc
+
+        gc.collect()
+
+    def _track(self, widget) -> None:
+        self.__class__._created.append(widget)
+        return widget
 
     def test_main_window_constructs_and_has_key_widgets(self) -> None:
         import devdrop_gui
 
-        window = devdrop_gui.MainWindow()
-        try:
-            self.assertEqual(window.windowTitle(), "DevDrop")
-            for widget in (
-                window.address_value,
-                window.code_value,
-                window.status_value,
-                window.session_value,
-                window.files_value,
-                window.size_value,
-                window.qr_code_value,
-            ):
-                self.assertIsNotNone(widget)
-            self.assertIsNotNone(window.history_list)
-            self.assertIsNotNone(window.drop_area)
-        finally:
-            window.close()
+        window = self._track(devdrop_gui.MainWindow())
+        self.assertEqual(window.windowTitle(), "DevDrop")
+        for widget in (
+            window.address_value,
+            window.code_value,
+            window.status_value,
+            window.session_value,
+            window.files_value,
+            window.size_value,
+            window.qr_code_value,
+        ):
+            self.assertIsNotNone(widget)
+        self.assertIsNotNone(window.history_list)
+        self.assertIsNotNone(window.drop_area)
 
     def test_settings_dialog_constructs(self) -> None:
         import devdrop_gui
         from app.config import DevDropConfig
 
-        dialog = devdrop_gui.SettingsDialog(
-            DevDropConfig(session_root=Path("C:/DevDrop"), port=8765)
+        dialog = self._track(
+            devdrop_gui.SettingsDialog(
+                DevDropConfig(session_root=Path("C:/DevDrop"), port=8765)
+            )
         )
-        try:
-            self.assertEqual(dialog.port_input.value(), 8765)
-            self.assertEqual(dialog.root_input.text().replace("\\", "/"), "C:/DevDrop")
-        finally:
-            dialog.close()
+        self.assertEqual(dialog.port_input.value(), 8765)
+        self.assertEqual(dialog.root_input.text().replace("\\", "/"), "C:/DevDrop")
 
     def test_format_bytes(self) -> None:
         import devdrop_gui
