@@ -174,12 +174,13 @@ async function sendText() {
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({ content }),
         });
-        const data = await response.json();
 
         if (!response.ok) {
-            throw new Error(data.detail || "Could not send text");
+            const text = await response.text();
+            throw new Error(text || "Could not send text");
         }
 
+        const data = await response.json();
         textContent.value = "";
         showSent();
     } catch (error) {
@@ -205,12 +206,13 @@ async function sendFile() {
             method: "POST",
             body: formData,
         });
-        const data = await response.json();
 
         if (!response.ok) {
-            throw new Error(data.detail || "Could not send file");
+            const text = await response.text();
+            throw new Error(text || "Could not send file");
         }
 
+        const data = await response.json();
         clearSelectedFile();
         showSent();
     } catch (error) {
