@@ -475,6 +475,11 @@ class MainWindow(QMainWindow):
         self.qr_address_value.setWordWrap(True)
         self._qr_payload: str | None = None
         self._last_status_snapshot: tuple[Any, ...] | None = None
+        # History only changes when a transfer completes; we skip both the
+        # network fetch and the widget rebuild unless the received-file count
+        # actually moved, keeping the 2s poll cheap and flicker-free.
+        self._last_history_files: int | None = None
+        self._last_history_signature: tuple[tuple[str, int, str], ...] | None = None
         self.settings_note = QLabel(
             "Settings changes apply to the next session. The current folder stays where it is."
         )
@@ -663,7 +668,12 @@ class MainWindow(QMainWindow):
 
         lan_address = f"http://{get_local_ip()}:{self.active_port}"
         self._update_qr_code(lan_address)
-        self.refresh_history()
+
+        received_files = int(data.get("received_files") or 0)
+        if received_files != self._last_history_files:
+            self.refresh_history()
+            self._last_history_files = received_files
+
         connected_devices = int(data.get("connected_devices") or 0)
         status_text = (
             "1 device connected"
@@ -722,15 +732,24 @@ class MainWindow(QMainWindow):
         except (OSError, urllib.error.URLError, TimeoutError, json.JSONDecodeError):
             return
 
-        self.history_list.clear()
         transfers = data.get("transfers") or []
+        # Rebuild the widget only when the underlying data actually changed.
+        signature = tuple(
+            (str(transfer.get("filename") or ""), int(transfer.get("size") or 0), str(transfer.get("timestamp") or ""))
+            for transfer in transfers[-20:]
+        )
+        self.clear_history_button.setEnabled(bool(transfers))
+        if signature == self._last_history_signature:
+            return
+        self._last_history_signature = signature
+
+        self.history_list.clear()
         for transfer in reversed(transfers[-20:]):
             filename = str(transfer.get("filename") or "upload.bin")
             size = format_bytes(int(transfer.get("size") or 0))
             sender_ip = str(transfer.get("sender_ip") or "unknown")
             timestamp = format_history_timestamp(str(transfer.get("timestamp") or ""))
             self.history_list.addItem(f"{filename}\n{size}    {sender_ip}    {timestamp}")
-        self.clear_history_button.setEnabled(bool(transfers))
 
     def clear_history(self) -> None:
         try:
