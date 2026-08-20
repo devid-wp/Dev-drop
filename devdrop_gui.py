@@ -4,6 +4,7 @@ import mimetypes
 import os
 import socket
 import sys
+import subprocess
 import threading
 import urllib.error
 import urllib.request
@@ -50,9 +51,47 @@ from app.runtime import HOST, create_session_folder, get_local_ip
 import app.main as backend
 
 
-VERSION = "0.1.1"
+VERSION = "0.1.2"
 POLL_INTERVAL_MS = 2000
+# Faster initial health check (0.5s vs 1.5s), normal polls stay at 1.5s
+INITIAL_TIMEOUT_SECONDS = 0.5
 REQUEST_TIMEOUT_SECONDS = 1.5
+FIREWALL_RULE_NAME = "DevDrop LAN"
+
+
+def ensure_firewall_rule(port: int) -> tuple[bool, str]:
+    """Ensure Windows Firewall allows inbound connections on the given port.
+    Returns (success, message). Requires administrator privileges.
+    """
+    if os.name != "nt":
+        return True, "Non-Windows platform, firewall not managed"
+    try:
+        # Check if rule already exists
+        check = subprocess.run(
+            ["netsh", "advfirewall", "firewall", "show", "rule", f"name={FIREWALL_RULE_NAME}"],
+            capture_output=True, text=True, timeout=5,
+            creationflags=subprocess.CREATE_NO_WINDOW
+        )
+        if "No rules match" not in check.stdout:
+            return True, "Firewall rule already exists"
+
+        # Create rule (requires admin)
+        result = subprocess.run(
+            [
+                "powershell", "-NoProfile", "-Command",
+                f"Start-Process powershell -ArgumentList '-NoProfile -Command "
+                f"New-NetFirewallRule -DisplayName \"{FIREWALL_RULE_NAME}\" "
+                f"-Direction Inbound -Protocol TCP -LocalPort {port} "
+                f"-Action Allow -Profile Domain,Private' -Verb RunAs"
+            ],
+            capture_output=True, text=True, timeout=10
+        )
+        if result.returncode == 0:
+            return True, "Firewall rule created successfully"
+        else:
+            return False, f"Failed to create firewall rule (need admin): {result.stderr}"
+    except Exception as e:
+        return False, f"Firewall check failed: {e}"
 
 
 class BackendClient:
@@ -103,6 +142,12 @@ class BackendManager:
                 f"Port {self.config.port} is already in use by another application."
             )
 
+        # Ensure Windows Firewall allows LAN access (auto-elevates to admin)
+        ok, msg = ensure_firewall_rule(self.config.port)
+        if not ok:
+            # Non-fatal: warn but continue (user can add rule manually)
+            print(f"Firewall: {msg}")
+
         self.session_dir = create_session_folder(self.config.session_root)
         backend.SESSION_DIR = self.session_dir
         backend.HISTORY_PATH = self.config.session_root / "transfer_history.json"
@@ -122,7 +167,10 @@ class BackendManager:
 
     def _is_devdrop_available(self) -> bool:
         try:
-            data = self.client.health()
+            request = urllib.request.Request(f"{self.client.base_url}/api/health", method="GET")
+            with urllib.request.urlopen(request, timeout=INITIAL_TIMEOUT_SECONDS) as response:
+                payload = response.read().decode("utf-8")
+                data = json.loads(payload)
         except (OSError, urllib.error.URLError, TimeoutError, json.JSONDecodeError):
             return False
         return data.get("app") == "DevDrop"
@@ -683,8 +731,23 @@ class MainWindow(QMainWindow):
             self._set_unavailable(str(error))
             return
 
+        # Brief wait for server to fully accept connections
+        QTimer.singleShot(300, self._wait_for_ready)
         self.poll_timer.start(POLL_INTERVAL_MS)
-        self.refresh_status()
+
+    def _wait_for_ready(self) -> None:
+        """Poll quickly until backend responds, then switch to normal polling."""
+        def check_ready() -> None:
+            try:
+                request = urllib.request.Request(f"{self.client.base_url}/api/health", method="GET")
+                with urllib.request.urlopen(request, timeout=0.3) as resp:
+                    if resp.status == 200:
+                        self.refresh_status()
+                        return
+            except Exception:
+                pass
+            QTimer.singleShot(150, check_ready)
+        check_ready()
 
     def refresh_status(self) -> None:
         try:

@@ -1,5 +1,7 @@
 import shutil
 import sys
+import subprocess
+import os
 from pathlib import Path
 
 import uvicorn
@@ -10,6 +12,36 @@ import app.main as backend
 
 
 PORT = DEFAULT_PORT
+FIREWALL_RULE_NAME = "DevDrop LAN"
+
+
+def ensure_firewall_rule(port: int) -> tuple[bool, str]:
+    if os.name != "nt":
+        return True, "Non-Windows platform"
+    try:
+        check = subprocess.run(
+            ["netsh", "advfirewall", "firewall", "show", "rule", f"name={FIREWALL_RULE_NAME}"],
+            capture_output=True, text=True, timeout=5,
+            creationflags=subprocess.CREATE_NO_WINDOW
+        )
+        if "No rules match" not in check.stdout:
+            return True, "Firewall rule already exists"
+        result = subprocess.run(
+            [
+                "powershell", "-NoProfile", "-Command",
+                f"Start-Process powershell -ArgumentList '-NoProfile -Command "
+                f"New-NetFirewallRule -DisplayName \"{FIREWALL_RULE_NAME}\" "
+                f"-Direction Inbound -Protocol TCP -LocalPort {port} "
+                f"-Action Allow -Profile Domain,Private' -Verb RunAs"
+            ],
+            capture_output=True, text=True, timeout=10
+        )
+        if result.returncode == 0:
+            return True, "Firewall rule created"
+        else:
+            return False, f"Failed to create firewall rule (need admin): {result.stderr}"
+    except Exception as e:
+        return False, f"Firewall check failed: {e}"
 
 
 def format_code(code: str) -> str:
@@ -64,6 +96,13 @@ def main() -> None:
     backend.SESSION_DIR = session_dir
     backend.SERVER_PORT = PORT
     ip = get_local_ip()
+
+    # Ensure Windows Firewall allows LAN access
+    ok, msg = ensure_firewall_rule(PORT)
+    if not ok:
+        print(f"Warning: {msg}")
+        print("  Phone access may be blocked. Run as Administrator to auto-fix.")
+
     print_banner(ip, session_dir)
 
     try:
