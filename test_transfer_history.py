@@ -36,6 +36,21 @@ class TransferHistoryTests(unittest.TestCase):
                 self.assertEqual(main.load_transfer_history(), [])
                 self.assertEqual(json.loads(history_file.read_text(encoding="utf-8")), [])
 
+    def test_initialize_session_stats_uses_incremental_totals(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            session_dir = Path(temporary_directory)
+            (session_dir / "one.bin").write_bytes(b"x" * 3456)
+            (session_dir / "two.bin").write_bytes(b"y" * 3456)
+
+            main.SESSION_DIR = session_dir
+            main.invalidate_session_stats()
+            main.initialize_session_stats(session_dir)
+
+            with patch.object(Path, "iterdir", side_effect=AssertionError("iterdir should not be called after initialization")):
+                stats = main.session_stats()
+
+            self.assertEqual(stats, {"received_files": 2, "received_size": 6912})
+
 
 if __name__ == "__main__":
     unittest.main()

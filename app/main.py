@@ -31,7 +31,12 @@ DISCOVERY_SERVICE: DiscoveryService | None = None
 sessions: dict[str, float] = {}
 pairing_code = ""
 pairing_created_at = 0.0
-session_stats_cache: tuple[Path, int, int] | None = None
+# Incremental session counters: updated when a transfer completes, never rescanned.
+_session_stats_count = 0
+_session_stats_bytes = 0
+_session_stats_dir: Path | None = None
+# 4 MiB strikes a good balance: bigger reduces syscalls per GB, smaller
+# keeps memory pressure low during multi-file transfers.
 TRANSFER_COPY_BUFFER_SIZE = 4 * 1024 * 1024
 
 
@@ -153,10 +158,46 @@ def record_transfers(files: list[tuple[str, int]], sender_ip: str) -> None:
     save_transfer_history(history)
 
 
-def invalidate_session_stats() -> None:
-    global session_stats_cache
+def initialize_session_stats(session_dir: Path) -> None:
+    """Seed the in-memory session counters from the current directory contents.
 
-    session_stats_cache = None
+    Called once at startup; subsequent updates are purely incremental.
+    """
+    global _session_stats_count, _session_stats_bytes, _session_stats_dir
+
+    _session_stats_dir = session_dir
+    try:
+        entries = list(session_dir.iterdir())
+    except OSError:
+        entries = []
+    count = 0
+    size = 0
+    for entry in entries:
+        try:
+            if entry.is_file():
+                count += 1
+                size += entry.stat().st_size
+        except OSError:
+            continue
+    _session_stats_count = count
+    _session_stats_bytes = size
+
+
+def bump_session_stats(count_delta: int, bytes_delta: int) -> None:
+    """Increment the in-memory session counters after a successful transfer."""
+    global _session_stats_count, _session_stats_bytes
+
+    _session_stats_count += count_delta
+    _session_stats_bytes += bytes_delta
+
+
+def invalidate_session_stats() -> None:
+    """Drop the cached stats so the next call re-initializes from the directory."""
+    global _session_stats_count, _session_stats_bytes, _session_stats_dir
+
+    _session_stats_count = 0
+    _session_stats_bytes = 0
+    _session_stats_dir = None
 
 
 def safe_upload_name(filename: str | None) -> str:
@@ -194,26 +235,19 @@ def open_unique_upload(session_dir: Path, filename: str):
 
 
 def session_stats() -> dict[str, int]:
-    global session_stats_cache
+    """Return in-memory session counters; never scans the directory."""
+    global _session_stats_dir
 
     session_dir = require_session_dir()
-    if session_stats_cache is not None and session_stats_cache[0] == session_dir:
-        return {
-            "received_files": session_stats_cache[1],
-            "received_size": session_stats_cache[2],
-        }
+    # Lazy one-time initialization for legacy callers that set SESSION_DIR
+    # directly (e.g. unit tests) without going through initialize_session_stats.
+    if _session_stats_dir != session_dir:
+        initialize_session_stats(session_dir)
 
-    files = [path for path in session_dir.iterdir() if path.is_file()]
-    stats = {
-        "received_files": len(files),
-        "received_size": sum(path.stat().st_size for path in files),
+    return {
+        "received_files": _session_stats_count,
+        "received_size": _session_stats_bytes,
     }
-    session_stats_cache = (
-        session_dir,
-        stats["received_files"],
-        stats["received_size"],
-    )
-    return stats
 
 
 generate_pairing_code()
@@ -222,6 +256,9 @@ generate_pairing_code()
 @app.on_event("startup")
 async def start_discovery() -> None:
     global DISCOVERY_SERVICE
+
+    if SESSION_DIR is not None:
+        initialize_session_stats(SESSION_DIR)
 
     DISCOVERY_SERVICE = DiscoveryService(SERVER_PORT)
     DISCOVERY_SERVICE.start()
@@ -349,7 +386,7 @@ async def receive_text(request: TextRequest):
         try:
             with file_path.open("x", encoding="utf-8") as output:
                 output.write(content)
-            invalidate_session_stats()
+            bump_session_stats(1, len(content.encode("utf-8")))
             break
         except FileExistsError:
             number += 1
@@ -365,8 +402,9 @@ async def receive_text(request: TextRequest):
 @app.post("/api/upload")
 def receive_file(request: Request, files: list[UploadFile] = File(...)):
     session_dir = require_session_dir()
-    saved_files = []
-    transfer_details = []
+    saved_files: list[str] = []
+    transfer_details: list[tuple[str, int]] = []
+    total_bytes = 0
 
     for file in files:
         filename = safe_upload_name(file.filename)
@@ -379,13 +417,15 @@ def receive_file(request: Request, files: list[UploadFile] = File(...)):
                     output,
                     length=TRANSFER_COPY_BUFFER_SIZE,
                 )
-            invalidate_session_stats()
+            size = file_path.stat().st_size
+            total_bytes += size
             saved_files.append(file_path.name)
-            transfer_details.append((file_path.name, file_path.stat().st_size))
+            transfer_details.append((file_path.name, size))
         except Exception:
             file_path.unlink(missing_ok=True)
             raise HTTPException(status_code=500, detail="Could not save file")
 
+    bump_session_stats(len(saved_files), total_bytes)
     sender_ip = request.client.host if request and request.client else "unknown"
     record_transfers(transfer_details, sender_ip)
 
