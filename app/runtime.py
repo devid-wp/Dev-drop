@@ -11,13 +11,35 @@ FIREWALL_RULE_NAME = "DevDrop LAN"
 
 
 def get_local_ip() -> str:
+    """Return the LAN IPv4 address used to reach the internet.
+    Connects to a known external IP (8.8.8.8) to force the OS to select
+    the correct LAN interface, avoiding VPN/virtual interfaces.
+    """
     sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
 
     try:
-        sock.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
-        sock.connect(("255.255.255.255", 9))
-        return sock.getsockname()[0]
+        # Connect to Google DNS - forces OS to pick the interface that
+        # routes to the internet (typically the primary LAN interface)
+        sock.connect(("8.8.8.8", 53))
+        ip = sock.getsockname()[0]
+        # Ensure it's a private LAN IP, not loopback or VPN
+        if ip.startswith("127.") or ip.startswith("169.254."):
+            raise OSError("Non-LAN IP detected")
+        return ip
     except OSError:
+        # Fallback: try to find a private IP from all interfaces
+        try:
+            import psutil
+            for iface, addrs in psutil.net_if_addrs().items():
+                for addr in addrs:
+                    if addr.family == socket.AF_INET:
+                        ip = addr.address
+                        if (ip.startswith("10.") or
+                            ip.startswith("172.16.") or
+                            ip.startswith("192.168.")):
+                            return ip
+        except Exception:
+            pass
         return "127.0.0.1"
     finally:
         sock.close()
