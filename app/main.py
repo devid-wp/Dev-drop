@@ -15,7 +15,11 @@ from pydantic import BaseModel
 from app.discovery import DiscoveryService
 
 
-BASE_DIR = Path(__file__).resolve().parent.parent
+if getattr(sys, "frozen", False):
+    # Running in PyInstaller bundle
+    BASE_DIR = Path(sys._MEIPASS)
+else:
+    BASE_DIR = Path(__file__).resolve().parent.parent
 WEB_DIR = BASE_DIR / "web"
 
 app = FastAPI(title="DevDrop")

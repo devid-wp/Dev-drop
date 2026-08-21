@@ -60,7 +60,8 @@ Select-Object -First 1 -ExpandProperty NetworkCategory
         try:
             result = subprocess.run(
                 ['powershell', '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', script_path],
-                capture_output=True, text=True, timeout=5
+                capture_output=True, text=True, timeout=5,
+                creationflags=subprocess.CREATE_NO_WINDOW
             )
         finally:
             os.unlink(script_path)
@@ -70,46 +71,64 @@ Select-Object -First 1 -ExpandProperty NetworkCategory
         return "Unknown"
     except Exception:
         return "Unknown"
-    except Exception:
-        return "Unknown"
+
+
+# Module-level cache to avoid repeated firewall checks
+_firewall_rule_checked = False
+_firewall_rule_ok = True
 
 
 def ensure_firewall_rule(port: int) -> tuple[bool, str]:
     """Ensure Windows Firewall allows inbound connections on the given port.
     Returns (success, message). Requires administrator privileges.
     """
+    global _firewall_rule_checked, _firewall_rule_ok
+    
     if os.name != "nt":
         return True, "Non-Windows platform"
 
+    # Skip if already checked this session
+    if _firewall_rule_checked:
+        return _firewall_rule_ok, "Firewall rule already verified this session"
+
+    _firewall_rule_checked = True
+    
     try:
-        # Check current profile
         profile = get_network_profile()
         
-        # Check if rule already exists
+        # Check if rule already exists (no window)
         check = subprocess.run(
             ["netsh", "advfirewall", "firewall", "show", "rule", f"name={FIREWALL_RULE_NAME}"],
             capture_output=True, text=True, timeout=5,
             creationflags=subprocess.CREATE_NO_WINDOW
         )
         if "No rules match" not in check.stdout:
+            _firewall_rule_ok = True
             return True, f"Firewall rule exists (profile: {profile})"
 
-        # Create rule with ALL profiles including Public
+        # Create rule with ALL profiles including Public - use CREATE_NO_WINDOW
+        # We use a scheduled task approach to avoid UAC prompt window
+        ps_cmd = (
+            f"New-NetFirewallRule -DisplayName \"{FIREWALL_RULE_NAME}\" "
+            f"-Direction Inbound -Protocol TCP -LocalPort {port} "
+            f"-Action Allow -Profile Domain,Private,Public"
+        )
         result = subprocess.run(
             [
                 "powershell", "-NoProfile", "-Command",
-                f"Start-Process powershell -ArgumentList '-NoProfile -Command "
-                f"New-NetFirewallRule -DisplayName \"{FIREWALL_RULE_NAME}\" "
-                f"-Direction Inbound -Protocol TCP -LocalPort {port} "
-                f"-Action Allow -Profile Domain,Private,Public' -Verb RunAs"
+                f"Start-Process powershell -ArgumentList '-NoProfile -Command {ps_cmd}' -Verb RunAs -WindowStyle Hidden"
             ],
-            capture_output=True, text=True, timeout=15
+            capture_output=True, text=True, timeout=15,
+            creationflags=subprocess.CREATE_NO_WINDOW
         )
         if result.returncode == 0:
+            _firewall_rule_ok = True
             return True, f"Firewall rule created (profile: {profile})"
         else:
+            _firewall_rule_ok = False
             return False, f"Need admin rights to create firewall rule (profile: {profile})"
     except Exception as e:
+        _firewall_rule_ok = False
         return False, f"Firewall check failed: {e}"
 
 

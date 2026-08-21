@@ -158,6 +158,7 @@ class BackendManager:
             host=HOST,
             port=self.config.port,
             log_level="warning",
+            log_config=None,
         )
         server = uvicorn.Server(server_config)
 
