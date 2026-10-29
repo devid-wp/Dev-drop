@@ -13,6 +13,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
 from app.discovery import DiscoveryService
+from app.uploads import open_unique_upload, safe_upload_name
 
 
 if getattr(sys, "frozen", False):
@@ -213,40 +214,6 @@ def invalidate_session_stats() -> None:
     _session_stats_count = 0
     _session_stats_bytes = 0
     _session_stats_dir = None
-
-
-def safe_upload_name(filename: str | None) -> str:
-    # Normalize both Windows and POSIX path separators before taking the basename.
-    basename = (filename or "").replace("\\", "/").rsplit("/", 1)[-1]
-    forbidden = '<>:"/\\|?*'
-    cleaned = "".join(
-        "_" if character in forbidden or ord(character) < 32 else character
-        for character in basename
-    ).strip().rstrip(". ")
-
-    if cleaned in {"", ".", ".."}:
-        return "upload.bin"
-
-    return cleaned
-
-
-def open_unique_upload(session_dir: Path, filename: str):
-    original = Path(filename)
-    stem = original.stem
-    suffix = original.suffix
-    number = 0
-
-    while True:
-        candidate_name = filename if number == 0 else f"{stem} ({number}){suffix}"
-        candidate = (session_dir / candidate_name).resolve()
-
-        if candidate.parent != session_dir:
-            raise HTTPException(status_code=400, detail="Invalid filename")
-
-        try:
-            return candidate, candidate.open("xb")
-        except FileExistsError:
-            number += 1
 
 
 def session_stats() -> dict[str, int]:
