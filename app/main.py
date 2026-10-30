@@ -8,13 +8,14 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from fastapi import Depends, FastAPI, File, HTTPException, Request, UploadFile
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict, Field
 from typing import Literal
 from urllib.parse import urlsplit
 from app.transfer_requests import TransferDescription, TransferError, TransferService
 
+from app.file_offers import FileOfferService, OfferError
 from app.history_store import HistoryStore, HistoryStoreError
 from app.discovery import DiscoveryService
 from app.uploads import open_unique_upload, safe_upload_name
@@ -39,6 +40,8 @@ SERVER_PORT = 8765
 DISCOVERY_SERVICE: DiscoveryService | None = None
 sessions: dict[str, float] = {}
 transfer_service = TransferService()
+file_offers = FileOfferService()
+session_client_info: dict[str, dict[str, str]] = {}
 pairing_code = ""
 pairing_created_at = 0.0
 # Incremental session counters: updated when a transfer completes, never rescanned.
@@ -63,12 +66,13 @@ def cleanup_expired_sessions() -> None:
     now = time.time()
     expired = [
         token
-        for token, created_at in sessions.items()
+        for token, created_at in list(sessions.items())
         if now - created_at >= SESSION_LIFETIME
     ]
 
     for token in expired:
         sessions.pop(token, None)
+        session_client_info.pop(token, None)
 
 
 def cli_print(message: str = "") -> None:
@@ -94,6 +98,7 @@ def session_is_valid(token: str) -> bool:
 
     if time.time() - created_at >= SESSION_LIFETIME:
         sessions.pop(token, None)
+        session_client_info.pop(token, None)
         return False
 
     return True
@@ -243,6 +248,7 @@ async def start_discovery() -> None:
 
 @app.on_event("shutdown")
 async def stop_discovery() -> None:
+    file_offers.close()
     if DISCOVERY_SERVICE is not None:
         DISCOVERY_SERVICE.stop()
 
@@ -340,6 +346,7 @@ async def pair_device(pair: PairRequest, request: Request):
 
     token = create_session()
     client_ip = request.client.host if request.client else "unknown"
+    session_client_info[token] = {"peer": client_ip, "agent": request.headers.get("user-agent", "Unknown client")[:100]}
 
     cli_print()
     cli_print("● Device connected")
@@ -377,7 +384,10 @@ async def gate_transfer_body(request: Request, call_next):
             return JSONResponse(status_code=error.status_code, content={"detail": error.detail}, headers=error.headers)
         except TransferError as error:
             return JSONResponse(status_code=409, content={"detail": str(error)})
-    return await call_next(request)
+    response = await call_next(request)
+    if request.url.path.startswith(("/api/incoming-offers", "/api/outgoing-offers", "/api/recipient-sessions")):
+        response.headers["Cache-Control"] = "no-store"
+    return response
 
 
 @app.exception_handler(TransferError)
@@ -428,6 +438,120 @@ async def decide_transfer(identity: str, decision: Literal["approve", "reject"],
     if request.headers.get("content-type", "").split(";")[0] != "application/json":
         raise HTTPException(status_code=403, detail="JSON request required")
     return transfer_service.decide(identity, decision == "approve")
+
+
+class OfferCreate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    path: str = Field(min_length=1, max_length=4096)
+    recipient_id: str = Field(pattern=r"^[a-f0-9]{64}$")
+
+
+def recipient_id(token: str) -> str:
+    # This opaque selector is not an authorization credential.
+    return hashlib.sha256(token.encode()).hexdigest()
+
+
+def offer_owner(request: Request):
+    require_local_owner(request)
+    if request.method == "POST" and request.headers.get("content-type", "").split(";")[0] != "application/json":
+        raise HTTPException(status_code=403, detail="JSON request required")
+
+
+@app.exception_handler(OfferError)
+async def offer_error(request: Request, error: OfferError):
+    return JSONResponse(status_code=409, content={"detail": str(error)})
+
+
+@app.get("/api/recipient-sessions")
+async def recipient_sessions(request: Request):
+    offer_owner(request)
+    cleanup_expired_sessions()
+    return {"sessions": [{"id": recipient_id(token), "created_at": created,
+                           **session_client_info.get(token, {"peer": "unknown", "agent": "Unknown client"})}
+                          for token, created in list(sessions.items())]}
+
+
+@app.post("/api/outgoing-offers")
+def create_file_offer(data: OfferCreate, request: Request):
+    offer_owner(request)
+    target = next((token for token in list(sessions) if recipient_id(token) == data.recipient_id and session_is_valid(token)), None)
+    if target is None:
+        raise OfferError("Recipient session is unavailable")
+    # Only the local owner may register a path; downloads never take a path.
+    return file_offers.create(Path(data.path), target, data.recipient_id)
+
+
+@app.get("/api/outgoing-offers")
+async def outgoing_file_offers(request: Request):
+    offer_owner(request)
+    return {"offers": file_offers.list()}
+
+
+@app.post("/api/outgoing-offers/{identity}/cancel")
+async def cancel_file_offer(identity: str, request: Request):
+    offer_owner(request)
+    return file_offers.cancel(identity)
+
+
+@app.get("/api/incoming-offers")
+async def incoming_file_offers(token: str = Depends(require_transfer_session)):
+    return {"offers": file_offers.list(token), "session_id": recipient_id(token)}
+
+
+@app.post("/api/incoming-offers/{identity}/accept")
+async def accept_file_offer(identity: str, token: str = Depends(require_transfer_session)):
+    offer, grant = file_offers.accept(identity, token)
+    response = JSONResponse(offer, headers={"Cache-Control": "no-store"})
+    response.set_cookie("__Secure-dd_download_" + identity, grant, secure=True, httponly=True,
+                        samesite="strict", path=f"/api/incoming-offers/{identity}/download",
+                        max_age=max(1, int(offer["expires_at"] - time.time())))
+    return response
+
+
+@app.post("/api/incoming-offers/{identity}/reject")
+async def reject_file_offer(identity: str, token: str = Depends(require_transfer_session)):
+    return file_offers.reject(identity, token)
+
+
+class OfferDownloadResponse(StreamingResponse):
+    def __init__(self, *args, cleanup, **kwargs):
+        self.cleanup = cleanup
+        super().__init__(*args, **kwargs)
+
+    async def __call__(self, scope, receive, send):
+        try:
+            await super().__call__(scope, receive, send)
+        finally:
+            # Also runs on disconnect or a failed send, before request teardown.
+            self.cleanup()
+
+
+@app.get("/api/incoming-offers/{identity}/download")
+async def download_file_offer(identity: str, request: Request):
+    token = await require_transfer_session(request) if request.headers.get("authorization") else None
+    offer, source = file_offers.claim(identity, request.cookies.get("__Secure-dd_download_" + identity, ""),
+                                     session_is_valid, token)
+    def stream():
+        complete = False
+        try:
+            while chunk := source.read(256 * 1024):
+                yield chunk
+            complete = True
+        finally:
+            source.close()
+            file_offers.finish(identity, complete)
+    def cleanup():
+        source.close()
+        file_offers.finish(identity, False)
+    from urllib.parse import quote
+    filename = quote(offer["filename"], safe="")
+    response = OfferDownloadResponse(stream(), media_type="application/octet-stream", headers={
+        "Content-Length": str(offer["size"]), "Content-Disposition": "attachment; filename*=UTF-8''" + filename,
+        "Cache-Control": "no-store", "X-Content-Type-Options": "nosniff", "Accept-Ranges": "none",
+    }, cleanup=cleanup)
+    response.delete_cookie("__Secure-dd_download_" + identity, path=f"/api/incoming-offers/{identity}/download",
+                           secure=True, httponly=True, samesite="strict")
+    return response
 
 
 @app.post("/api/text", dependencies=[Depends(require_transfer_session)])

@@ -94,6 +94,30 @@ class GUITests(unittest.TestCase):
                 work()
                 client.assert_called_once_with("POST", "/api/transfer-requests/request-id/reject")
 
+    def test_outgoing_file_offer_and_cancel_use_background_work(self) -> None:
+        import devdrop_gui
+        from PySide6.QtCore import Qt
+        window = self._track(devdrop_gui.MainWindow())
+        window.recipient_box.addItem("Browser session", "recipient-id")
+        with patch("devdrop_gui.QFileDialog.getOpenFileName", return_value=("/tmp/chosen.txt", "")), patch(
+            "devdrop_gui.background"
+        ) as worker:
+            window.offer_button.click()
+            self.assertTrue(window._creating_offer)
+            self.assertFalse(window.offer_button.isEnabled())
+            work = worker.call_args.args[1]
+            with patch.object(window.client, "transfer_request") as client:
+                work()
+                client.assert_called_once_with("POST", "/api/outgoing-offers",
+                    {"path": "/tmp/chosen.txt", "recipient_id": "recipient-id"}, timeout=120)
+            window.outgoing_list.addItem("chosen.txt | pending")
+            window.outgoing_list.item(0).setData(Qt.ItemDataRole.UserRole, "offer-id")
+            window.outgoing_list.setCurrentRow(0)
+            window.cancel_offer_button.click()
+            with patch.object(window.client, "transfer_request") as client:
+                worker.call_args.args[1]()
+                client.assert_called_once_with("POST", "/api/outgoing-offers/offer-id/cancel")
+
     def test_settings_dialog_constructs(self) -> None:
         import devdrop_gui
         from app.config import DevDropConfig

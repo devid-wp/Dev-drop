@@ -259,3 +259,9 @@ alone has no approval prompt; use the GUI or the local management API.
 Both launchers now require provisioned TLS identities and refuse HTTP fallback.
 See [transport setup and trust model](docs/TRANSPORT.md) before launching, including
 phone CA installation, encrypted keys and certificate renewal.
+
+## Send files from PC to phone
+
+Pair the phone, match its session ID in the desktop's **Send to browser** section,
+and offer a chosen file. On the phone use **Incoming files -> Accept -> Download**.
+See [PC-to-browser behavior, APIs and limits](docs/PC_TO_BROWSER.md).

@@ -40,6 +40,7 @@ from PySide6.QtWidgets import (
     QLabel,
     QLineEdit,
     QInputDialog,
+    QComboBox,
     QMainWindow,
     QMessageBox,
     QPushButton,
@@ -156,7 +157,7 @@ class BackendClient:
         with open_local(request, timeout=REQUEST_TIMEOUT_SECONDS) as response:
             return json.loads(response.read().decode("utf-8"))["token"]
 
-    def transfer_request(self, method, path, payload=None, token=None):
+    def transfer_request(self, method, path, payload=None, token=None, timeout=REQUEST_TIMEOUT_SECONDS):
         headers = {"Content-Type": "application/json"}
         if token:
             headers["Authorization"] = f"Bearer {token}"
@@ -164,7 +165,7 @@ class BackendClient:
             f"{self.base_url}{path}", method=method, headers=headers,
             data=json.dumps(payload).encode() if payload is not None else None,
         )
-        with open_local(request, timeout=REQUEST_TIMEOUT_SECONDS) as response:
+        with open_local(request, timeout=timeout) as response:
             return json.loads(response.read())
 
     def await_approval(self, files, token):
@@ -641,6 +642,16 @@ class MainWindow(QMainWindow):
         )
         self.settings_note.setObjectName("muted")
         self.settings_note.setWordWrap(True)
+        self.recipient_box = QComboBox()
+        self.offer_button = QPushButton("Choose file and offer to browser")
+        self.offer_button.clicked.connect(self.offer_to_browser)
+        self.outgoing_list = QListWidget()
+        self.cancel_offer_button = QPushButton("Cancel selected offer")
+        self.cancel_offer_button.clicked.connect(self.cancel_outgoing_offer)
+        self.outgoing_status = QLabel("")
+        self.outgoing_status.setWordWrap(True)
+        self._outgoing_busy = False
+        self._creating_offer = False
         self.pending_list = QListWidget()
         self.approve_button = QPushButton("Approve")
         self.reject_button = QPushButton("Reject")
@@ -668,6 +679,7 @@ class MainWindow(QMainWindow):
 
         self.approval_timer = QTimer(self)
         self.approval_timer.timeout.connect(self.refresh_pending)
+        self.approval_timer.timeout.connect(self.refresh_outgoing)
         self.approval_timer.start(1000)
         self.poll_timer = QTimer(self)
         self.poll_timer.timeout.connect(self.refresh_status)
@@ -760,6 +772,13 @@ class MainWindow(QMainWindow):
         approval_actions.addWidget(self.approve_button)
         approval_actions.addWidget(self.reject_button)
         pending.addLayout(approval_actions)
+        outgoing = self._section("Send to browser — select the session shown on the phone")
+        outgoing.addWidget(self.recipient_box)
+        outgoing.addWidget(self.offer_button)
+        outgoing.addWidget(self.outgoing_list)
+        outgoing.addWidget(self.cancel_offer_button)
+        outgoing.addWidget(self.outgoing_status)
+        layout.addLayout(outgoing)
         layout.addLayout(pending)
         layout.addLayout(transfer)
         layout.addWidget(self._line())
@@ -871,6 +890,71 @@ class MainWindow(QMainWindow):
                 pass
             QTimer.singleShot(150, check_ready)
         check_ready()
+
+    def refresh_outgoing(self):
+        if self._outgoing_busy:
+            return
+        self._outgoing_busy = True
+        def work():
+            recipients = self.client.transfer_request("GET", "/api/recipient-sessions")
+            offers = self.client.transfer_request("GET", "/api/outgoing-offers")
+            return recipients, offers
+        def done(result):
+            self._outgoing_busy = False
+            recipients, offers = result
+            selected = self.recipient_box.currentData()
+            self.recipient_box.clear()
+            for session in recipients.get("sessions", []):
+                label = f"{session['id'][:8]} | {session['peer']} | {session['agent']}"
+                self.recipient_box.addItem(label, session["id"])
+            index = self.recipient_box.findData(selected)
+            if index >= 0:
+                self.recipient_box.setCurrentIndex(index)
+            self.offer_button.setEnabled(self.recipient_box.count() > 0 and not self._creating_offer)
+            item = self.outgoing_list.currentItem()
+            identity = item.data(Qt.ItemDataRole.UserRole) if item else None
+            self.outgoing_list.clear()
+            for offer in offers.get("offers", []):
+                text = f"{offer['filename']} | {format_bytes(offer['size'])} | {offer['recipient_id'][:8]} | {offer['status']}"
+                self.outgoing_list.addItem(text)
+                item = self.outgoing_list.item(self.outgoing_list.count() - 1)
+                item.setData(Qt.ItemDataRole.UserRole, offer["id"])
+                if offer["id"] == identity:
+                    self.outgoing_list.setCurrentItem(item)
+        def failed(message):
+            self._outgoing_busy = False
+            self.outgoing_status.setText(message)
+        background(self, work, done, failed)
+
+    def offer_to_browser(self):
+        recipient = self.recipient_box.currentData()
+        if not recipient or self._creating_offer:
+            return
+        filename, _ = QFileDialog.getOpenFileName(self, "Offer file to browser")
+        if not filename:
+            return
+        self._creating_offer = True
+        self.offer_button.setEnabled(False)
+        self.outgoing_status.setText("Preparing a private file copy...")
+        def done(offer):
+            self._creating_offer = False
+            self.outgoing_status.setText(f"Offered {offer['filename']}; waiting for recipient")
+            self.offer_button.setEnabled(True)
+            self.refresh_outgoing()
+        def failed(message):
+            self._creating_offer = False
+            self.offer_button.setEnabled(True)
+            self.outgoing_status.setText(message)
+        background(self, lambda: self.client.transfer_request("POST", "/api/outgoing-offers",
+            {"path": filename, "recipient_id": recipient}, timeout=120), done, failed)
+
+    def cancel_outgoing_offer(self):
+        item = self.outgoing_list.currentItem()
+        if item is None:
+            return
+        identity = item.data(Qt.ItemDataRole.UserRole)
+        background(self, lambda: self.client.transfer_request("POST", f"/api/outgoing-offers/{identity}/cancel"),
+                   lambda _: self.refresh_outgoing(), lambda message: self.outgoing_status.setText(message))
 
     def refresh_pending(self):
         if self._pending_busy:

@@ -29,7 +29,7 @@ let approvalStatus = "approved";
 const context = vm.createContext({
  document: {querySelector: element, querySelectorAll: () => [], createElement: element},
  crypto: require("node:crypto").webcrypto,
- window: {location: {protocol:"https:",origin:"https://localhost:8765"}, setTimeout: f => {f(); return 1}, clearTimeout(){}},
+ window: {setInterval: () => 1, clearInterval(){}, location: {protocol:"https:",origin:"https://localhost:8765"}, setTimeout: f => {f(); return 1}, clearTimeout(){}},
  TextEncoder, FormData: class {append(){}}, URL,
  fetch: async (url, options = {}) => {
   calls.push([url, options]);

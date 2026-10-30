@@ -25,6 +25,10 @@ const transferStatus = document.querySelector("#transfer-status");
 const discoveredServers = document.querySelector("#discovered-servers");
 const serverList = document.querySelector("#server-list");
 
+const incomingFiles = document.querySelector("#incoming-files");
+const incomingStatus = document.querySelector("#incoming-status");
+let incomingTimer = null;
+let incomingBusy = false;
 let sessionToken = null;
 let currentMode = "text";
 let selectedFiles = [];
@@ -355,6 +359,10 @@ function showPairingStatus(message, isError) {
 }
 
 function returnToPairing() {
+    window.clearInterval(incomingTimer);
+    incomingTimer = null;
+    incomingFiles.replaceChildren();
+    document.querySelector("#incoming-session").textContent = "";
     sessionToken = null;
     transferScreen.classList.add("hidden");
     pairingScreen.classList.remove("hidden");
@@ -392,6 +400,76 @@ function openTransferScreen() {
     pairingScreen.classList.add("hidden");
     transferScreen.classList.remove("hidden");
     textContent.focus();
+    window.clearInterval(incomingTimer);
+    incomingTimer = window.setInterval(refreshIncoming, 2000);
+    refreshIncoming();
+}
+
+async function refreshIncoming() {
+    if (incomingBusy || !sessionToken) return;
+    incomingBusy = true;
+    const token = sessionToken;
+    try {
+        const response = await authorizedFetch("/api/incoming-offers", {cache: "no-store"});
+        if (!response.ok) throw new Error("Could not load incoming files");
+        const data = await response.json();
+        if (token !== sessionToken) return;
+        incomingFiles.replaceChildren();
+        document.querySelector("#incoming-session").textContent = data.session_id ? `This browser: ${data.session_id.slice(0, 8)}` : "";
+        for (const offer of data.offers || []) {
+            const row = document.createElement("div");
+            const label = document.createElement("p");
+            label.textContent = `${offer.filename} | ${formatFileSize(offer.size)} | ${offer.sender} | ${offer.status}`;
+            row.appendChild(label);
+            if (offer.status === "pending") {
+                for (const decision of ["accept", "reject"]) {
+                    const button = document.createElement("button");
+                    button.type = "button";
+                    button.textContent = decision === "accept" ? "Accept" : "Reject";
+                    button.addEventListener("click", () => decideIncoming(offer, decision, row));
+                    row.appendChild(button);
+                }
+            } else if (offer.status === "accepted") {
+                addDownloadLink(offer, row);
+            }
+            incomingFiles.appendChild(row);
+        }
+    } catch (error) {
+        incomingStatus.textContent = error.message || "Incoming files unavailable";
+    } finally {
+        incomingBusy = false;
+    }
+}
+
+function addDownloadLink(offer, row) {
+    const link = document.createElement("a");
+    link.href = `/api/incoming-offers/${encodeURIComponent(offer.id)}/download`;
+    link.download = offer.filename;
+    link.textContent = "Download";
+    link.referrerPolicy = "no-referrer";
+    row.appendChild(link);
+}
+
+async function decideIncoming(offer, decision, row) {
+    const token = sessionToken;
+    try {
+        const response = await authorizedFetch(`/api/incoming-offers/${encodeURIComponent(offer.id)}/${decision}`, {method: "POST"});
+        if (!response.ok) throw new Error("Offer expired or is no longer available");
+        const current = await response.json();
+        if (token !== sessionToken) return;
+        row.replaceChildren();
+        const label = document.createElement("p");
+        label.textContent = `${offer.filename}: ${current.status}`;
+        row.appendChild(label);
+        if (decision === "accept") {
+            addDownloadLink(offer, row);
+            incomingStatus.textContent = "Accepted. Tap Download to save the file.";
+        } else {
+            incomingStatus.textContent = "File rejected";
+        }
+    } catch (error) {
+        incomingStatus.textContent = error.message;
+    }
 }
 
 function setSending() {
