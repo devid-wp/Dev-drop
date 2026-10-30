@@ -365,6 +365,8 @@ async def require_transfer_session(request: Request) -> str:
 
 @app.middleware("http")
 async def gate_transfer_body(request: Request, call_next):
+    if request.scope.get("scheme") != "https":
+        return JSONResponse(status_code=426, content={"detail": "HTTPS is required; HTTP is disabled"})
     # Reject before FastAPI parses/spools a multipart body. Actual content and
     # atomic one-use consumption are still checked in the receive handlers.
     if request.method == "POST" and request.url.path.rstrip("/") in {"/api/text", "/api/upload"}:

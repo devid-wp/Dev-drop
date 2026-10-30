@@ -21,6 +21,10 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent
 sys.path.insert(0, str(ROOT))
 
+from unittest.mock import patch
+from app.transport import TLSSettings, open_local
+from tls_test_support import make_pki, PASSWORD
+
 import uvicorn  # noqa: E402
 
 import app.main as backend  # noqa: E402
@@ -35,13 +39,14 @@ _SERVER: uvicorn.Server | None = None
 def _start_server() -> None:
     global _SERVER
     backend.SERVER_PORT = PORT
-    cfg = uvicorn.Config(backend.app, host="127.0.0.1", port=PORT, log_level="error")
+    cfg = uvicorn.Config(backend.app, host="127.0.0.1", port=PORT, log_level="error", proxy_headers=False,
+                         **TLSSettings.load().server_options(PASSWORD))
     _SERVER = uvicorn.Server(cfg)
     threading.Thread(target=_SERVER.run, daemon=True).start()
     deadline = time.time() + 10
     while time.time() < deadline:
         try:
-            with urllib.request.urlopen(f"http://127.0.0.1:{PORT}/api/health", timeout=0.3):
+            with open_local(urllib.request.Request(f"https://127.0.0.1:{PORT}/api/health"), timeout=0.3):
                 return
         except (urllib.error.URLError, ConnectionError, OSError):
             time.sleep(0.05)
@@ -54,7 +59,7 @@ def _stop_server() -> None:
 
 
 def _post(body: bytes, content_type: str) -> tuple[int, dict]:
-    conn = http.client.HTTPConnection("127.0.0.1", PORT)
+    conn = TLSSettings.load().connection(PORT)
     try:
         conn.request("POST", "/api/upload", body=body, headers={"Content-Type": content_type, "Authorization": f"Bearer {TOKEN}", "X-Transfer-ID": TRANSFER_ID})
         resp = conn.getresponse()
@@ -106,7 +111,7 @@ def _chunked_upload(filename: str, size_bytes: int, chunk_size: int = 1024 * 102
         type="file", sender="test", description="large upload", files=[{
             "name": filename, "size": size_bytes, "sha256": hashlib.sha256(b"\x00" * size_bytes).hexdigest()}]))
     backend.transfer_service.decide(transfer["id"], True)
-    conn = http.client.HTTPConnection("127.0.0.1", PORT)
+    conn = TLSSettings.load().connection(PORT)
     conn.putrequest("POST", "/api/upload")
     conn.putheader("Content-Type", f"multipart/form-data; boundary={boundary}")
     conn.putheader("Transfer-Encoding", "chunked")
@@ -140,6 +145,12 @@ def _chunked_upload(filename: str, size_bytes: int, chunk_size: int = 1024 * 102
 class UploadIntegrationTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls) -> None:
+        tls_directory = tempfile.TemporaryDirectory(prefix="devdrop-tls-test-")
+        cls.addClassCleanup(tls_directory.cleanup)
+        config = make_pki(Path(tls_directory.name))
+        tls_patch = patch.dict(os.environ, {"DEVDROP_TLS_CONFIG": str(config)})
+        tls_patch.start()
+        cls.addClassCleanup(tls_patch.stop)
         global TOKEN
         TOKEN = backend.create_session()
         cls.addClassCleanup(backend.sessions.pop, TOKEN, None)

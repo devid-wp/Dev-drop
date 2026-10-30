@@ -23,7 +23,8 @@ No accounts. No cloud. Just your devices.
 
 ## How it works
 
-Start DevDrop on your computer:
+First complete the [required HTTPS and phone trust setup](docs/TRANSPORT.md).
+Then start DevDrop on your computer (the encrypted TLS key password is requested):
 
 ```bash
 python devdrop.py
@@ -41,7 +42,7 @@ DevDrop will display something like:
 ╰────────────────────────────────────────────────────────╯
 
 Pairing code   223 975 676
-Open           http://192.168.0.107:8765
+Open           https://192.168.0.107:8765
 Session        C:\Users\user\DevDrop\session-2026-08-18_15-06-38
 
 Waiting for devices...
@@ -50,9 +51,9 @@ Waiting for devices...
 On another device:
 
 1. Connect to the same local network.
-2. Open the displayed address in a browser.
+2. Open the displayed HTTPS address with the verified CA already trusted; stop on any certificate warning.
 3. Enter the pairing code.
-4. Send text, files, or photos.
+4. Request a transfer and wait for the owner to approve it in the desktop GUI.
 
 Received data is stored inside the current DevDrop session directory.
 
@@ -148,7 +149,10 @@ devdrop/
 
 DevDrop is currently designed as a lightweight local-network utility.
 
-The pairing system provides basic protection against accidental access, but **DevDrop v0.1 should not be treated as a secure or encrypted file-transfer protocol**.
+HTTPS with explicitly provisioned trust now protects transport. Bearer sessions
+and a separate one-use owner approval protect each transfer. See the
+[transport trust model and limitations](docs/TRANSPORT.md); CA installation and
+first trust are manual, and local processes remain inside the owner boundary.
 
 Do not expose the DevDrop server directly to the public internet.
 
@@ -159,7 +163,7 @@ Possible future improvements:
 - Transfer progress
 - Live device status
 - Improved authentication
-- HTTPS / encrypted transfers
+- Automated certificate lifecycle and onboarding
 - Better Linux integration
 - Packaged Windows and Linux releases
 - QR-code pairing
@@ -238,14 +242,20 @@ The GUI displays pending claims and sends all network/hash/wait work for this
 flow to background threads. Select a request and click Approve or Reject. GUI
 file sends use the same flow and never auto-approve. The browser waits, polls
 status and shows rejection/expiration; it hashes before requesting approval.
-For LAN HTTP without WebCrypto, a SHA-256 fallback is included and checked against
-Node's SHA-256 on multiple block boundaries. Browser hashing currently reads a
-whole file into memory, so very large files can be expensive.
+HTTPS and WebCrypto are now required; the HTTP SHA-256 fallback has been removed.
+Browser hashing currently reads a whole file into memory, so very large files can
+be expensive.
 
 Limits: 100 files per request, 20 active requests per session, 1000 retained
 requests total; terminal/used records are discarded one hour after their deadline.
 Expiry frees active slots. All request memory is lost on restart. Loopback is the
 existing owner trust boundary: another local process can make owner decisions.
-This does not isolate OS users or provide TLS, persistent device trust, upload
-quotas, or atomic transactions spanning saved files and SQLite history. The CLI
+This does not isolate OS users or provide persistent device trust, upload quotas,
+or atomic transactions spanning saved files and SQLite history. The CLI
 alone has no approval prompt; use the GUI or the local management API.
+
+## Required HTTPS setup
+
+Both launchers now require provisioned TLS identities and refuse HTTP fallback.
+See [transport setup and trust model](docs/TRANSPORT.md) before launching, including
+phone CA installation, encrypted keys and certificate renewal.

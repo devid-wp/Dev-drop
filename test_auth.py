@@ -10,7 +10,7 @@ from unittest.mock import patch
 from app import main
 
 
-def request(path, method="GET", payload=None, headers=None, host="192.0.2.10"):
+def request(path, method="GET", payload=None, headers=None, host="192.0.2.10", scheme="https"):
     body = json.dumps(payload).encode() if payload is not None else b""
     raw_headers = [(b"content-type", b"application/json")]
     raw_headers += [(k.lower().encode(), v.encode()) for k, v in (headers or {}).items()]
@@ -30,7 +30,7 @@ def request(path, method="GET", payload=None, headers=None, host="192.0.2.10"):
             messages.append(message)
 
         await main.app({"type": "http", "asgi": {"version": "3.0"},
-                        "http_version": "1.1", "method": method, "scheme": "http",
+                        "http_version": "1.1", "method": method, "scheme": scheme,
                         "path": path, "raw_path": path.encode(), "query_string": b"",
                         "root_path": "", "headers": raw_headers,
                         "client": (host, 1234), "server": ("127.0.0.1", 8765)}, receive, send)
@@ -106,7 +106,7 @@ class AuthTests(unittest.TestCase):
                                    json.loads(req.data) if req.data else None, host="127.0.0.1")
             self.assertEqual(status, 200)
             return Response(body)
-        with patch("devdrop_gui.urllib.request.urlopen", side_effect=urlopen):
+        with patch("devdrop_gui.open_local", side_effect=urlopen):
             token = BackendClient(8765).transfer_token()
         self.assertTrue(main.session_is_valid(token))
         source = self.root / "source.txt"
@@ -117,8 +117,9 @@ class AuthTests(unittest.TestCase):
         sender = SimpleNamespace(window=lambda: SimpleNamespace(active_port=8765),
                                  _send_chunk=FileDropArea._send_chunk)
         with patch.object(BackendClient, "await_approval", return_value="approved-request") as approval, patch.object(BackendClient, "transfer_token", return_value=token), patch(
-            "devdrop_gui.http.client.HTTPConnection", return_value=connection
-        ):
+            "app.transport.TLSSettings.load"
+        ) as settings:
+            settings.return_value.connection.return_value = connection
             self.assertEqual(FileDropArea._upload_files(sender, [source]), ["source.txt"])
         connection.putheader.assert_any_call("Authorization", f"Bearer {token}")
         connection.putheader.assert_any_call("X-Transfer-ID", "approved-request")

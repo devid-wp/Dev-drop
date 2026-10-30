@@ -35,6 +35,7 @@ let isCameraMode = false;
 discoverServers();
 
 async function discoverServers() {
+    if (window.location.protocol !== "https:") return;
     try {
         const response = await fetch("/api/discover", { cache: "no-store" });
         if (!response.ok) return;
@@ -52,7 +53,10 @@ async function discoverServers() {
                 + `<em>${escapeHtml(server.status || "Available")}</em>`;
             button.addEventListener("click", () => {
                 const url = new URL(server.url, window.location.href);
-                window.location.href = url.href;
+                // Discovery is unauthenticated. Do not navigate to another identity.
+                if (url.protocol === "https:" && url.origin === window.location.origin) {
+                    window.location.href = url.href;
+                }
             });
             serverList.appendChild(button);
         });
@@ -75,6 +79,10 @@ function escapeHtml(value) {
 
 pairingForm.addEventListener("submit", async (event) => {
     event.preventDefault();
+    if (window.location.protocol !== "https:") {
+        showPairingStatus("Trusted HTTPS is required. Do not pair over HTTP.", true);
+        return;
+    }
     const code = pairingInput.value.replace(/\D/g, "");
 
     if (code.length !== 9) {
@@ -87,6 +95,7 @@ pairingForm.addEventListener("submit", async (event) => {
 
     try {
         const response = await fetch("/api/pair", {
+            redirect: "error",
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({ code }),
@@ -162,46 +171,12 @@ sendButton.addEventListener("click", async () => {
     }
 });
 
-// SHA-256 fallback also works on plain LAN HTTP, where crypto.subtle is unavailable.
 async function sha256(buffer) {
-    if (globalThis.crypto?.subtle) {
-        const digest = await globalThis.crypto.subtle.digest("SHA-256", buffer);
-        return Array.from(new Uint8Array(digest), x => x.toString(16).padStart(2, "0")).join("");
+    if (window.location.protocol !== "https:" || !globalThis.crypto?.subtle) {
+        throw new Error("Trusted HTTPS is required");
     }
-    const bytes = new Uint8Array(buffer);
-    const length = Math.ceil((bytes.length + 9) / 64) * 64;
-    const data = new Uint8Array(length);
-    data.set(bytes); data[bytes.length] = 128;
-    const view = new DataView(data.buffer);
-    view.setUint32(length - 8, Math.floor(bytes.length / 0x20000000));
-    view.setUint32(length - 4, (bytes.length * 8) >>> 0);
-    const primes = [];
-    for (let n = 2; primes.length < 64; n++) {
-        if (!primes.some(p => n % p === 0)) primes.push(n);
-    }
-    const fraction = x => ((x % 1) * 0x100000000) | 0;
-    const constants = primes.map(p => fraction(Math.cbrt(p)));
-    const state = primes.slice(0, 8).map(p => fraction(Math.sqrt(p)));
-    const rotate = (x, n) => (x >>> n) | (x << (32 - n));
-    const words = new Int32Array(64);
-    for (let offset = 0; offset < length; offset += 64) {
-        for (let i = 0; i < 16; i++) words[i] = view.getInt32(offset + i * 4);
-        for (let i = 16; i < 64; i++) {
-            const a = words[i - 15], b = words[i - 2];
-            words[i] = (words[i - 16] + (rotate(a, 7) ^ rotate(a, 18) ^ (a >>> 3)) +
-                words[i - 7] + (rotate(b, 17) ^ rotate(b, 19) ^ (b >>> 10))) | 0;
-        }
-        let [a,b,c,d,e,f,g,h] = state;
-        for (let i = 0; i < 64; i++) {
-            const t1 = (h + (rotate(e,6) ^ rotate(e,11) ^ rotate(e,25)) +
-                ((e & f) ^ (~e & g)) + constants[i] + words[i]) | 0;
-            const t2 = ((rotate(a,2) ^ rotate(a,13) ^ rotate(a,22)) +
-                ((a & b) ^ (a & c) ^ (b & c))) | 0;
-            h=g; g=f; f=e; e=(d+t1)|0; d=c; c=b; b=a; a=(t1+t2)|0;
-        }
-        [a,b,c,d,e,f,g,h].forEach((value, i) => {state[i] = (state[i] + value) | 0;});
-    }
-    return state.map(x => (x >>> 0).toString(16).padStart(8, "0")).join("");
+    const digest = await globalThis.crypto.subtle.digest("SHA-256", buffer);
+    return Array.from(new Uint8Array(digest), x => x.toString(16).padStart(2, "0")).join("");
 }
 
 async function requestApproval(description) {
@@ -392,12 +367,17 @@ function returnToPairing() {
 }
 
 async function authorizedFetch(url, options) {
+    if (window.location.protocol !== "https:") {
+        returnToPairing();
+        throw new Error("Trusted HTTPS is required");
+    }
     if (!sessionToken) {
         returnToPairing();
         throw new Error("Connect again");
     }
     const response = await fetch(url, {
         ...options,
+        redirect: "error",
         headers: { ...options.headers, Authorization: `Bearer ${sessionToken}` },
     });
     if (response.status === 401) {

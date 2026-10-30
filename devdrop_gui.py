@@ -5,6 +5,7 @@ import json
 import http.client
 import mimetypes
 import os
+import ssl
 import socket
 import sys
 import subprocess
@@ -38,6 +39,7 @@ from PySide6.QtWidgets import (
     QHBoxLayout,
     QLabel,
     QLineEdit,
+    QInputDialog,
     QMainWindow,
     QMessageBox,
     QPushButton,
@@ -51,6 +53,7 @@ from PySide6.QtWidgets import (
 
 from app.config import DevDropConfig, load_config, save_config
 from app.runtime import HOST, create_session_folder, get_local_ip, ensure_firewall_rule, get_network_profile
+from app.transport import TLSSettings, TransportError, open_local
 import app.main as backend
 
 
@@ -125,7 +128,7 @@ class BackendClient:
 
     @property
     def base_url(self) -> str:
-        return f"http://127.0.0.1:{self.port}"
+        return f"https://127.0.0.1:{self.port}"
 
     def get_status(self) -> dict[str, Any]:
         return self._request("GET", "/api/status")
@@ -150,7 +153,7 @@ class BackendClient:
             data=json.dumps({"code": code}).encode("utf-8"),
             headers={"Content-Type": "application/json"}, method="POST",
         )
-        with urllib.request.urlopen(request, timeout=REQUEST_TIMEOUT_SECONDS) as response:
+        with open_local(request, timeout=REQUEST_TIMEOUT_SECONDS) as response:
             return json.loads(response.read().decode("utf-8"))["token"]
 
     def transfer_request(self, method, path, payload=None, token=None):
@@ -161,7 +164,7 @@ class BackendClient:
             f"{self.base_url}{path}", method=method, headers=headers,
             data=json.dumps(payload).encode() if payload is not None else None,
         )
-        with urllib.request.urlopen(request, timeout=REQUEST_TIMEOUT_SECONDS) as response:
+        with open_local(request, timeout=REQUEST_TIMEOUT_SECONDS) as response:
             return json.loads(response.read())
 
     def await_approval(self, files, token):
@@ -193,7 +196,7 @@ class BackendClient:
 
     def _request(self, method: str, path: str) -> dict[str, Any]:
         request = urllib.request.Request(f"{self.base_url}{path}", method=method)
-        with urllib.request.urlopen(request, timeout=REQUEST_TIMEOUT_SECONDS) as response:
+        with open_local(request, timeout=REQUEST_TIMEOUT_SECONDS) as response:
             payload = response.read().decode("utf-8")
             return json.loads(payload)
 
@@ -216,6 +219,11 @@ class BackendManager:
                 f"Port {self.config.port} is already in use by another application."
             )
 
+        tls = TLSSettings.load()
+        password, accepted = QInputDialog.getText(None, "DevDrop HTTPS", "TLS private-key password:", QLineEdit.EchoMode.Password)
+        if not accepted:
+            raise TransportError("HTTPS startup cancelled")
+        tls_options = tls.server_options(password)
         # Ensure Windows Firewall allows LAN access (auto-elevates to admin)
         ok, msg = ensure_firewall_rule(self.config.port)
         if not ok:
@@ -229,6 +237,7 @@ class BackendManager:
 
         server_config = uvicorn.Config(
             backend.app,
+            **tls_options,
             host=HOST,
             proxy_headers=False,
             port=self.config.port,
@@ -244,10 +253,16 @@ class BackendManager:
     def _is_devdrop_available(self) -> bool:
         try:
             request = urllib.request.Request(f"{self.client.base_url}/api/health", method="GET")
-            with urllib.request.urlopen(request, timeout=INITIAL_TIMEOUT_SECONDS) as response:
+            with open_local(request, timeout=INITIAL_TIMEOUT_SECONDS) as response:
                 payload = response.read().decode("utf-8")
                 data = json.loads(payload)
-        except (OSError, urllib.error.URLError, TimeoutError, json.JSONDecodeError):
+        except TransportError:
+            raise
+        except urllib.error.URLError as error:
+            if isinstance(error.reason, ssl.SSLCertVerificationError):
+                raise TransportError("TLS server identity or trust validation failed; verify the certificate out of band") from error
+            return False
+        except (OSError, TimeoutError, json.JSONDecodeError):
             return False
         return data.get("app") == "DevDrop"
 
@@ -451,9 +466,7 @@ class FileDropArea(QFrame):
         token = client.transfer_token()
         identity = client.await_approval(files, token)
         boundary = f"----DevDrop{os.urandom(12).hex()}"
-        connection = http.client.HTTPConnection(
-            "127.0.0.1", port, timeout=60
-        )
+        connection = TLSSettings.load().connection(port, timeout=60)
         connection.putrequest("POST", "/api/upload")
         connection.putheader("Content-Type", f"multipart/form-data; boundary={boundary}")
         connection.putheader("Transfer-Encoding", "chunked")
@@ -850,7 +863,7 @@ class MainWindow(QMainWindow):
         def check_ready() -> None:
             try:
                 request = urllib.request.Request(f"{self.client.base_url}/api/health", method="GET")
-                with urllib.request.urlopen(request, timeout=0.3) as resp:
+                with open_local(request, timeout=0.3) as resp:
                     if resp.status == 200:
                         self.refresh_status()
                         return
@@ -896,11 +909,15 @@ class MainWindow(QMainWindow):
     def refresh_status(self) -> None:
         try:
             data = self.client.get_status()
-        except (OSError, urllib.error.URLError, TimeoutError, json.JSONDecodeError) as error:
+        except (TransportError, OSError, urllib.error.URLError, TimeoutError, json.JSONDecodeError) as error:
             self._set_unavailable(f"Backend unavailable: {error}")
             return
 
-        lan_address = f"http://{get_local_ip()}:{self.active_port}"
+        try:
+            lan_address = TLSSettings.load().url(self.active_port)
+        except TransportError as error:
+            self._set_unavailable(str(error))
+            return
         self._update_qr_code(lan_address)
 
         # Network profile (Public/Private/Domain) - important for LAN visibility
@@ -965,7 +982,7 @@ class MainWindow(QMainWindow):
         self.regenerate_button.setEnabled(False)
         try:
             data = self.client.regenerate_code()
-        except (OSError, urllib.error.URLError, TimeoutError, json.JSONDecodeError) as error:
+        except (TransportError, OSError, urllib.error.URLError, TimeoutError, json.JSONDecodeError) as error:
             self._set_unavailable(f"Could not regenerate code: {error}")
             return
 
@@ -976,7 +993,7 @@ class MainWindow(QMainWindow):
     def refresh_history(self) -> None:
         try:
             data = self.client.get_history()
-        except (OSError, urllib.error.URLError, TimeoutError, json.JSONDecodeError):
+        except (TransportError, OSError, urllib.error.URLError, TimeoutError, json.JSONDecodeError):
             return
 
         transfers = data.get("transfers") or []
@@ -1001,7 +1018,7 @@ class MainWindow(QMainWindow):
     def clear_history(self) -> None:
         try:
             self.client.clear_history()
-        except (OSError, urllib.error.URLError, TimeoutError, json.JSONDecodeError) as error:
+        except (TransportError, OSError, urllib.error.URLError, TimeoutError, json.JSONDecodeError) as error:
             QMessageBox.warning(self, "Could not clear history", str(error))
             return
         self.refresh_history()
@@ -1043,9 +1060,10 @@ class MainWindow(QMainWindow):
         self._last_status_snapshot = None
         self.status_value.setText(message)
         self.status_dot.set_color(QColor("#73737d"))
-        lan_address = f"http://127.0.0.1:{self.active_port}"
-        self.address_value.setText(lan_address)
-        self._update_qr_code(lan_address)
+        self.address_value.setText("HTTPS unavailable — configure TLS")
+        self.qr_code_value.clear()
+        self.qr_address_value.setText("No trusted HTTPS address")
+        self._qr_payload = None
         self.regenerate_button.setEnabled(False)
         self.open_folder_button.setEnabled(False)
         self.copy_address_button.setEnabled(False)

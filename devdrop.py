@@ -1,3 +1,5 @@
+from getpass import getpass
+from app.transport import TLSSettings, TransportError
 import shutil
 import sys
 import subprocess
@@ -31,7 +33,7 @@ def print_banner(ip: str, session_dir: Path) -> None:
     print("╰────────────────────────────────────────────────────────╯")
     print()
     print(f"  Pairing code   {code}")
-    print(f"  Open           http://{ip}:{PORT}")
+    print(f"  Open           {TLSSettings.load().url(PORT)}")
     print(f"  Session        {session_dir}")
     print()
     print("Waiting for devices...")
@@ -62,6 +64,12 @@ def main() -> None:
     if hasattr(sys.stdout, "reconfigure"):
         sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 
+    try:
+        tls = TLSSettings.load()
+        tls_options = tls.server_options(getpass("TLS private-key password: "))
+    except (TransportError, EOFError) as error:
+        print(f"HTTPS startup refused: {error}")
+        return
     session_dir = create_session_folder(Path.home() / "DevDrop")
     backend.SESSION_DIR = session_dir
     backend.SERVER_PORT = PORT
@@ -83,6 +91,7 @@ def main() -> None:
     try:
         uvicorn.run(
             backend.app,
+            **tls_options,
             host=HOST,
             proxy_headers=False,
             port=PORT,

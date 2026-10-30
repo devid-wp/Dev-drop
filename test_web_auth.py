@@ -28,7 +28,8 @@ let expire = false;
 let approvalStatus = "approved";
 const context = vm.createContext({
  document: {querySelector: element, querySelectorAll: () => [], createElement: element},
- window: {setTimeout: f => {f(); return 1}, clearTimeout(){}},
+ crypto: require("node:crypto").webcrypto,
+ window: {location: {protocol:"https:",origin:"https://localhost:8765"}, setTimeout: f => {f(); return 1}, clearTimeout(){}},
  TextEncoder, FormData: class {append(){}}, URL,
  fetch: async (url, options = {}) => {
   calls.push([url, options]);
@@ -70,6 +71,12 @@ vm.runInContext(fs.readFileSync('web/app.js', 'utf8'), context);
   assert.equal(element('#transfer-status').textContent, `Transfer ${state}`);
  }
  approvalStatus = 'approved';
+ context.window.location.protocol = 'http:';
+ const beforeHttp = calls.length;
+ await element('.pairing-form').handlers.submit({preventDefault(){}});
+ await vm.runInContext('sendText()', context);
+ assert.equal(calls.length, beforeHttp);
+ context.window.location.protocol = 'https:';
  expire = true;
  element('#text-content').value = 'again';
  await vm.runInContext('sendText()', context);

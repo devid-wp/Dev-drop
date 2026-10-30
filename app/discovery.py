@@ -95,7 +95,7 @@ class DiscoveryService:
                     "name": str(response.get("name") or "DevDrop"),
                     "ip": ip,
                     "port": port,
-                    "url": f"http://{ip}:{port}",
+                    "url": f"https://{ip}:{port}",
                     "status": "Available",
                 }
 
@@ -106,7 +106,7 @@ class DiscoveryService:
                 "name": self.server_name,
                 "ip": local_ip,
                 "port": self.server_port,
-                "url": f"http://{local_ip}:{self.server_port}",
+                "url": f"https://{local_ip}:{self.server_port}",
                 "status": "Available",
             },
         )

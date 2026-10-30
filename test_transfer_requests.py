@@ -206,7 +206,7 @@ class TransferAPITests(unittest.TestCase):
                                    {"Authorization": req.get_header("Authorization")})
             self.assertEqual(status, 200)
             return Response(body)
-        with patch("devdrop_gui.urllib.request.urlopen", side_effect=urlopen):
+        with patch("devdrop_gui.open_local", side_effect=urlopen):
             identity = client.await_approval([source], self.token)
         main.transfer_service.consume(identity, self.token, "file", 5,
                                       files=[{"name": "gui.txt", "size": 5, "sha256": hashlib.sha256(b"hello").hexdigest()}])
