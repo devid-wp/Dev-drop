@@ -1,3 +1,4 @@
+import hashlib
 import asyncio
 import secrets
 import shutil
@@ -10,6 +11,9 @@ from fastapi import Depends, FastAPI, File, HTTPException, Request, UploadFile
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
+from typing import Literal
+from urllib.parse import urlsplit
+from app.transfer_requests import TransferDescription, TransferError, TransferService
 
 from app.history_store import HistoryStore, HistoryStoreError
 from app.discovery import DiscoveryService
@@ -34,6 +38,7 @@ HISTORY_PATH: Path | None = None
 SERVER_PORT = 8765
 DISCOVERY_SERVICE: DiscoveryService | None = None
 sessions: dict[str, float] = {}
+transfer_service = TransferService()
 pairing_code = ""
 pairing_created_at = 0.0
 # Incremental session counters: updated when a transfer completes, never rescanned.
@@ -51,6 +56,7 @@ class PairRequest(BaseModel):
 
 class TextRequest(BaseModel):
     content: str
+    type: Literal["text", "link"] = "text"
 
 
 def cleanup_expired_sessions() -> None:
@@ -345,7 +351,7 @@ async def pair_device(pair: PairRequest, request: Request):
     return {"paired": True, "token": token}
 
 
-async def require_transfer_session(request: Request) -> None:
+async def require_transfer_session(request: Request) -> str:
     """Require an existing session for every sender, including loopback clients."""
     scheme, _, token = request.headers.get("Authorization", "").partition(" ")
     if scheme.lower() != "bearer" or not token or not session_is_valid(token):
@@ -354,9 +360,79 @@ async def require_transfer_session(request: Request) -> None:
             headers={"WWW-Authenticate": "Bearer"},
         )
 
+    return token
+
+
+@app.middleware("http")
+async def gate_transfer_body(request: Request, call_next):
+    # Reject before FastAPI parses/spools a multipart body. Actual content and
+    # atomic one-use consumption are still checked in the receive handlers.
+    if request.method == "POST" and request.url.path.rstrip("/") in {"/api/text", "/api/upload"}:
+        try:
+            token = await require_transfer_session(request)
+            transfer_service.check_approved(request.headers.get("X-Transfer-ID", ""), token)
+        except HTTPException as error:
+            return JSONResponse(status_code=error.status_code, content={"detail": error.detail}, headers=error.headers)
+        except TransferError as error:
+            return JSONResponse(status_code=409, content={"detail": str(error)})
+    return await call_next(request)
+
+
+@app.exception_handler(TransferError)
+async def transfer_error(request: Request, error: TransferError):
+    return JSONResponse(status_code=409, content={"detail": str(error)})
+
+
+@app.post("/api/transfer-requests")
+async def create_transfer(description: TransferDescription, token: str = Depends(require_transfer_session)):
+    return transfer_service.create(token, description)
+
+
+def require_local_owner(request: Request):
+    # Only the direct loopback connection is authoritative. Block browser
+    # cross-origin submissions and DNS rebinding for these decision endpoints.
+    if not _is_local_request(request):
+        raise HTTPException(status_code=403, detail="Management endpoint is local-only")
+    for value in (request.headers.get("origin"), request.headers.get("host")):
+        if not value:
+            continue
+        try:
+            host = urlsplit(value if "://" in value else "http://" + value).hostname
+        except ValueError:
+            host = None
+        if host not in {"127.0.0.1", "::1", "localhost"}:
+            raise HTTPException(status_code=403, detail="Local owner origin required")
+
+
+@app.get("/api/transfer-requests")
+async def pending_transfers(request: Request):
+    require_local_owner(request)
+    return {"requests": transfer_service.pending()}
+
+
+@app.get("/api/transfer-requests/{identity}")
+async def transfer_state(identity: str, token: str = Depends(require_transfer_session)):
+    return transfer_service.state(identity, token)
+
+
+@app.post("/api/transfer-requests/{identity}/cancel")
+async def cancel_transfer(identity: str, token: str = Depends(require_transfer_session)):
+    return transfer_service.cancel(identity, token)
+
+
+@app.post("/api/transfer-requests/{identity}/{decision}")
+async def decide_transfer(identity: str, decision: Literal["approve", "reject"], request: Request):
+    require_local_owner(request)
+    if request.headers.get("content-type", "").split(";")[0] != "application/json":
+        raise HTTPException(status_code=403, detail="JSON request required")
+    return transfer_service.decide(identity, decision == "approve")
+
 
 @app.post("/api/text", dependencies=[Depends(require_transfer_session)])
-async def receive_text(request: TextRequest):
+async def receive_text(request: TextRequest, http_request: Request, token: str = Depends(require_transfer_session)):
+    raw = request.content.encode("utf-8")
+    transfer_service.consume(http_request.headers.get("X-Transfer-ID", ""), token,
+                             request.type, len(raw), hashlib.sha256(raw).hexdigest())
     session_dir = require_session_dir()
     content = request.content.strip()
 
@@ -383,7 +459,18 @@ async def receive_text(request: TextRequest):
 
 
 @app.post("/api/upload", dependencies=[Depends(require_transfer_session)])
-def receive_file(request: Request, files: list[UploadFile] = File(...)):
+def receive_file(request: Request, files: list[UploadFile] = File(...), token: str = Depends(require_transfer_session)):
+    manifest = []
+    for file in files:
+        digest = hashlib.sha256()
+        size = 0
+        while chunk := file.file.read(TRANSFER_COPY_BUFFER_SIZE):
+            digest.update(chunk)
+            size += len(chunk)
+        file.file.seek(0)
+        manifest.append({"name": file.filename, "size": size, "sha256": digest.hexdigest()})
+    transfer_service.consume(request.headers.get("X-Transfer-ID", ""), token, "file",
+                             sum(item["size"] for item in manifest), files=manifest)
     session_dir = require_session_dir()
     saved_files: list[str] = []
     transfer_details: list[tuple[str, int]] = []

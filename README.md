@@ -197,3 +197,55 @@ JSON backup intact. Filesystem file saves and SQLite commits are separate:
 a history failure after a successful file save can return 503 even though the
 file exists. There is no automatic reconciliation at this stage. Back up both
 the SQLite database and the legacy JSON while the application is stopped.
+
+## Per-transfer approval
+
+Every sender, including the desktop GUI, needs a fresh approval in addition to
+its Bearer session. The process-local transfer service has a 120-second deadline
+for both pending and approved requests. Restarting the backend loses all requests
+and approvals; clients must pair/request again. Use one backend process/worker.
+
+API (Bearer required except the local owner list/decisions):
+
+- `POST /api/transfer-requests`: create with `type` (`file`, `text`, `link`),
+  `sender`, `description`, optional `size`, and a content commitment.
+- `GET /api/transfer-requests/{id}`: sender's own state only.
+- `POST /api/transfer-requests/{id}/cancel`: sender cancellation.
+- `GET /api/transfer-requests`: pending list, direct loopback owner only.
+- `POST /api/transfer-requests/{id}/approve` or `/reject`: local owner decision;
+  requires `Content-Type: application/json`. Browser Origin/Host must be local.
+- Existing `POST /api/text` and `/api/upload` now additionally require
+  `X-Transfer-ID: <approved request id>`. Missing/invalid sessions return 401;
+  unavailable, unapproved, mismatched or reused permissions return 409.
+
+Text/link commitments use SHA-256 of the exact UTF-8 `content` bytes; links use
+`type: "link"` in the `/api/text` payload and are saved as text, never fetched or
+opened. File commitments use an ordered `files` array of `{name, size, sha256}`;
+its total size must match `size` when supplied. Multipart names and bytes must
+match that manifest exactly. All hashes are lowercase hexadecimal. Names and
+descriptions are sender claims, not verified identities or a content preview.
+
+States are `pending -> approved/rejected/expired/cancelled`, with approved
+requests also able to expire or be cancelled before use. `approved` plus
+`used: true` records consumption without adding a new status. The lock makes
+consumption atomic: only one sender can spend a permission, before filesystem
+writes. A failed save spends it too; retry needs a new owner approval. A mismatch
+does not spend a still-valid permission. Headers are checked before multipart
+parsing; actual hashes are checked after receiving and before session-file writes.
+An approved upload can still use temporary spool storage during verification.
+
+The GUI displays pending claims and sends all network/hash/wait work for this
+flow to background threads. Select a request and click Approve or Reject. GUI
+file sends use the same flow and never auto-approve. The browser waits, polls
+status and shows rejection/expiration; it hashes before requesting approval.
+For LAN HTTP without WebCrypto, a SHA-256 fallback is included and checked against
+Node's SHA-256 on multiple block boundaries. Browser hashing currently reads a
+whole file into memory, so very large files can be expensive.
+
+Limits: 100 files per request, 20 active requests per session, 1000 retained
+requests total; terminal/used records are discarded one hour after their deadline.
+Expiry frees active slots. All request memory is lost on restart. Loopback is the
+existing owner trust boundary: another local process can make owner decisions.
+This does not isolate OS users or provide TLS, persistent device trust, upload
+quotas, or atomic transactions spanning saved files and SQLite history. The CLI
+alone has no approval prompt; use the GUI or the local management API.

@@ -1,3 +1,6 @@
+import hashlib
+import queue
+import time
 import json
 import http.client
 import mimetypes
@@ -94,6 +97,28 @@ def ensure_firewall_rule(port: int) -> tuple[bool, str]:
         return False, f"Firewall check failed: {e}"
 
 
+def background(widget, work, success, failure):
+    """Run blocking work off the Qt thread; deliver results on its timer."""
+    results = queue.Queue()
+    timer = QTimer(widget)
+    def run():
+        try:
+            results.put((True, work()))
+        except Exception as error:
+            results.put((False, str(error)))
+    def poll():
+        try:
+            ok, value = results.get_nowait()
+        except queue.Empty:
+            return
+        timer.stop()
+        timer.deleteLater()
+        (success if ok else failure)(value)
+    timer.timeout.connect(poll)
+    timer.start(100)
+    threading.Thread(target=run, daemon=True).start()
+
+
 class BackendClient:
     def __init__(self, port: int) -> None:
         self.port = port
@@ -127,6 +152,44 @@ class BackendClient:
         )
         with urllib.request.urlopen(request, timeout=REQUEST_TIMEOUT_SECONDS) as response:
             return json.loads(response.read().decode("utf-8"))["token"]
+
+    def transfer_request(self, method, path, payload=None, token=None):
+        headers = {"Content-Type": "application/json"}
+        if token:
+            headers["Authorization"] = f"Bearer {token}"
+        request = urllib.request.Request(
+            f"{self.base_url}{path}", method=method, headers=headers,
+            data=json.dumps(payload).encode() if payload is not None else None,
+        )
+        with urllib.request.urlopen(request, timeout=REQUEST_TIMEOUT_SECONDS) as response:
+            return json.loads(response.read())
+
+    def await_approval(self, files, token):
+        manifest = []
+        for file in files:
+            if "\r" in file.name or "\n" in file.name:
+                raise ValueError("Filenames containing newlines cannot be sent")
+            digest = hashlib.sha256()
+            size = 0
+            with file.open("rb") as source:
+                while chunk := source.read(1024 * 1024):
+                    digest.update(chunk)
+                    size += len(chunk)
+            manifest.append({"name": file.name, "size": size, "sha256": digest.hexdigest()})
+        transfer = self.transfer_request("POST", "/api/transfer-requests", {
+            "type": "file", "sender": "Desktop GUI (unverified)",
+            "description": ", ".join(file.name for file in files)[:500],
+            "size": sum(item["size"] for item in manifest), "files": manifest,
+        }, token)
+        deadline = time.monotonic() + 125
+        while time.monotonic() < deadline:
+            state = self.transfer_request("GET", f"/api/transfer-requests/{transfer['id']}", token=token)
+            if state["status"] == "approved" and not state["used"]:
+                return transfer["id"]
+            if state["status"] != "pending":
+                raise ValueError(f"Transfer {state['status']}")
+            time.sleep(0.5)
+        raise ValueError("Approval expired")
 
     def _request(self, method: str, path: str) -> dict[str, Any]:
         request = urllib.request.Request(f"{self.base_url}{path}", method=method)
@@ -369,28 +432,37 @@ class FileDropArea(QFrame):
     def send_files(self) -> None:
         if not self.selected_files:
             return
-        try:
-            saved = self._upload_files(self.selected_files)
-        except (OSError, ValueError, http.client.HTTPException) as error:
-            QMessageBox.warning(self, "Could not send files", str(error))
-            return
-        self.set_files([])
-        self.hint.setText(f"Sent {len(saved)} file(s)")
+        files = list(self.selected_files)
+        port = self.window().active_port
+        self.setEnabled(False)
+        self.hint.setText("Waiting for owner approval...")
+        def finished(saved):
+            self.setEnabled(True)
+            self.set_files([])
+            self.hint.setText(f"Sent {len(saved)} file(s)")
+        def failed(message):
+            self.setEnabled(True)
+            self.hint.setText(message)
+        background(self, lambda: self._upload_files(files, port), finished, failed)
 
-    def _upload_files(self, files: list[Path]) -> list[str]:
-        token = BackendClient(self.window().active_port).transfer_token()
+    def _upload_files(self, files: list[Path], port=None) -> list[str]:
+        port = self.window().active_port if port is None else port
+        client = BackendClient(port)
+        token = client.transfer_token()
+        identity = client.await_approval(files, token)
         boundary = f"----DevDrop{os.urandom(12).hex()}"
         connection = http.client.HTTPConnection(
-            "127.0.0.1", self.window().active_port, timeout=60
+            "127.0.0.1", port, timeout=60
         )
         connection.putrequest("POST", "/api/upload")
         connection.putheader("Content-Type", f"multipart/form-data; boundary={boundary}")
         connection.putheader("Transfer-Encoding", "chunked")
         connection.putheader("Authorization", f"Bearer {token}")
+        connection.putheader("X-Transfer-ID", identity)
         connection.endheaders()
         try:
             for file in files:
-                filename = file.name.encode("utf-8").decode("latin-1", "replace")
+                filename = file.name.replace("\\", "\\\\").replace('"', '\\"')
                 content_type = mimetypes.guess_type(file.name)[0] or "application/octet-stream"
                 header = (
                     f"--{boundary}\r\n"
@@ -556,6 +628,12 @@ class MainWindow(QMainWindow):
         )
         self.settings_note.setObjectName("muted")
         self.settings_note.setWordWrap(True)
+        self.pending_list = QListWidget()
+        self.approve_button = QPushButton("Approve")
+        self.reject_button = QPushButton("Reject")
+        self.approve_button.clicked.connect(lambda: self.decide_pending("approve"))
+        self.reject_button.clicked.connect(lambda: self.decide_pending("reject"))
+        self._pending_busy = False
         self.history_list = QListWidget()
         self.history_list.setObjectName("historyList")
         self.history_list.setMinimumHeight(110)
@@ -575,6 +653,9 @@ class MainWindow(QMainWindow):
         self._build_ui()
         self.setStyleSheet(APP_STYLES)
 
+        self.approval_timer = QTimer(self)
+        self.approval_timer.timeout.connect(self.refresh_pending)
+        self.approval_timer.start(1000)
         self.poll_timer = QTimer(self)
         self.poll_timer.timeout.connect(self.refresh_status)
 
@@ -660,6 +741,13 @@ class MainWindow(QMainWindow):
         layout.addLayout(connection_area)
         layout.addLayout(actions)
         layout.addWidget(self._line())
+        pending = self._section("Pending transfers — sender names are unverified")
+        pending.addWidget(self.pending_list)
+        approval_actions = QHBoxLayout()
+        approval_actions.addWidget(self.approve_button)
+        approval_actions.addWidget(self.reject_button)
+        pending.addLayout(approval_actions)
+        layout.addLayout(pending)
         layout.addLayout(transfer)
         layout.addWidget(self._line())
         layout.addLayout(session)
@@ -770,6 +858,40 @@ class MainWindow(QMainWindow):
                 pass
             QTimer.singleShot(150, check_ready)
         check_ready()
+
+    def refresh_pending(self):
+        if self._pending_busy:
+            return
+        self._pending_busy = True
+        def done(data):
+            self._pending_busy = False
+            selected = self.pending_list.currentItem()
+            identity = selected.data(Qt.ItemDataRole.UserRole) if selected else None
+            self.pending_list.clear()
+            for transfer in data.get("requests", []):
+                size = format_bytes(transfer["size"]) if transfer["size"] is not None else "unknown size"
+                text = f"{transfer['type']} | {transfer['sender']} | {size}\n{transfer['description']}"
+                if transfer["files"]:
+                    text += "\n" + ", ".join(item["name"] for item in transfer["files"])
+                self.pending_list.addItem(text)
+                item = self.pending_list.item(self.pending_list.count() - 1)
+                item.setData(Qt.ItemDataRole.UserRole, transfer["id"])
+                if transfer["id"] == identity:
+                    self.pending_list.setCurrentItem(item)
+        def failed(message):
+            self._pending_busy = False
+            self.pending_list.clear()
+        background(self, lambda: self.client.transfer_request("GET", "/api/transfer-requests"), done, failed)
+
+    def decide_pending(self, decision):
+        item = self.pending_list.currentItem()
+        if item is None:
+            return
+        identity = item.data(Qt.ItemDataRole.UserRole)
+        background(self, lambda: self.client.transfer_request(
+            "POST", f"/api/transfer-requests/{identity}/{decision}"),
+            lambda _: self.refresh_pending(),
+            lambda message: QMessageBox.warning(self, "Transfer request", message))
 
     def refresh_status(self) -> None:
         try:

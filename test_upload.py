@@ -6,6 +6,7 @@ root, then exercises single, multi, large and duplicate-filename uploads over
 real HTTP (multipart). Uses http.client so large files stream chunked instead
 of buffering the whole body in memory.
 """
+import hashlib
 import http.client
 import os
 import shutil
@@ -26,6 +27,7 @@ import app.main as backend  # noqa: E402
 
 PORT = 18771
 TOKEN = ""
+TRANSFER_ID = ""
 BOUNDARY_TAG = "----DevDropTests"
 _SERVER: uvicorn.Server | None = None
 
@@ -54,7 +56,7 @@ def _stop_server() -> None:
 def _post(body: bytes, content_type: str) -> tuple[int, dict]:
     conn = http.client.HTTPConnection("127.0.0.1", PORT)
     try:
-        conn.request("POST", "/api/upload", body=body, headers={"Content-Type": content_type, "Authorization": f"Bearer {TOKEN}"})
+        conn.request("POST", "/api/upload", body=body, headers={"Content-Type": content_type, "Authorization": f"Bearer {TOKEN}", "X-Transfer-ID": TRANSFER_ID})
         resp = conn.getresponse()
         payload = resp.read().decode("utf-8")
         import json
@@ -66,6 +68,13 @@ def _post(body: bytes, content_type: str) -> tuple[int, dict]:
 
 def _multipart_body(files: list[tuple[str, bytes]]) -> tuple[bytes, str]:
     """Build a single-shot multipart body from (filename, content) pairs."""
+    global TRANSFER_ID
+    from app.transfer_requests import TransferDescription
+    manifest = [{"name": name, "size": len(data), "sha256": hashlib.sha256(data).hexdigest()} for name, data in files]
+    transfer = backend.transfer_service.create(TOKEN, TransferDescription(
+        type="file", sender="test", description="upload test", files=manifest))
+    backend.transfer_service.decide(transfer["id"], True)
+    TRANSFER_ID = transfer["id"]
     boundary = f"{BOUNDARY_TAG}{os.urandom(4).hex()}"
     parts = []
     for name, data in files:
@@ -92,11 +101,17 @@ def _chunked_upload(filename: str, size_bytes: int, chunk_size: int = 1024 * 102
     ).encode()
     trailer = b"\r\n--" + boundary.encode() + b"--\r\n"
 
+    from app.transfer_requests import TransferDescription
+    transfer = backend.transfer_service.create(TOKEN, TransferDescription(
+        type="file", sender="test", description="large upload", files=[{
+            "name": filename, "size": size_bytes, "sha256": hashlib.sha256(b"\x00" * size_bytes).hexdigest()}]))
+    backend.transfer_service.decide(transfer["id"], True)
     conn = http.client.HTTPConnection("127.0.0.1", PORT)
     conn.putrequest("POST", "/api/upload")
     conn.putheader("Content-Type", f"multipart/form-data; boundary={boundary}")
     conn.putheader("Transfer-Encoding", "chunked")
     conn.putheader("Authorization", f"Bearer {TOKEN}")
+    conn.putheader("X-Transfer-ID", transfer["id"])
     conn.endheaders()
 
     def send(data: bytes) -> None:
@@ -174,6 +189,68 @@ class UploadIntegrationTests(unittest.TestCase):
         status, payload = _post(body, ctype)
         self.assertEqual(status, 200)
         self.assertEqual(sorted(payload["saved"]), ["dup (1).txt", "dup.txt"])
+
+    def test_upload_permission_cannot_be_missing_replayed_or_substituted(self) -> None:
+        global TRANSFER_ID, TOKEN
+        body, ctype = _multipart_body([("secure.txt", b"hello")])
+        identity = TRANSFER_ID
+        TRANSFER_ID = ""
+        self.assertEqual(_post(body, ctype)[0], 409)
+        self.assertFalse((self.session / "secure.txt").exists())
+        TRANSFER_ID = identity
+        self.assertEqual(_post(body.replace(b"hello", b"other"), ctype)[0], 409)
+        self.assertFalse((self.session / "secure.txt").exists())
+        owner_token = TOKEN
+        TOKEN = backend.create_session()
+        try:
+            self.assertEqual(_post(body, ctype)[0], 409)
+        finally:
+            backend.sessions.pop(TOKEN, None)
+            TOKEN = owner_token
+        self.assertEqual(_post(body, ctype)[0], 200)
+        self.assertEqual(_post(body, ctype)[0], 409)
+        self.assertFalse((self.session / "secure (1).txt").exists())
+
+    def test_upload_pending_rejected_and_expired_permissions(self) -> None:
+        global TRANSFER_ID
+        from app.transfer_requests import TransferDescription
+        from unittest.mock import patch
+        for decision in ("pending", "rejected", "expired"):
+            body, ctype = _multipart_body([("unapproved.txt", b"hello")])
+            transfer = backend.transfer_service.create(TOKEN, TransferDescription(
+                type="file", sender="test", description="unapproved", files=[{
+                    "name": "unapproved.txt", "size": 5, "sha256": hashlib.sha256(b"hello").hexdigest()}]))
+            TRANSFER_ID = transfer["id"]
+            if decision == "rejected":
+                backend.transfer_service.decide(TRANSFER_ID, False)
+            if decision == "expired":
+                with patch.object(backend.transfer_service, "clock", return_value=transfer["expires_at"] + 1):
+                    self.assertEqual(_post(body, ctype)[0], 409)
+            else:
+                self.assertEqual(_post(body, ctype)[0], 409)
+            self.assertFalse((self.session / "unapproved.txt").exists())
+
+    def test_gui_upload_with_unicode_filename_requires_approval(self) -> None:
+        from types import SimpleNamespace
+        from unittest.mock import patch
+        from devdrop_gui import BackendClient, FileDropArea
+        from app.transfer_requests import TransferDescription
+        source = self.root / "пример.txt"
+        source.write_bytes(b"GUI data")
+        decisions = []
+        def approve(client, files, token):
+            transfer = backend.transfer_service.create(token, TransferDescription(
+                type="file", sender="GUI test", description="unicode file", files=[{
+                    "name": source.name, "size": 8, "sha256": hashlib.sha256(b"GUI data").hexdigest()}]))
+            decisions.append(transfer["id"])
+            backend.transfer_service.decide(transfer["id"], True)
+            return transfer["id"]
+        sender = SimpleNamespace(_send_chunk=FileDropArea._send_chunk)
+        with patch.object(BackendClient, "await_approval", autospec=True, side_effect=approve):
+            saved = FileDropArea._upload_files(sender, [source], PORT)
+        self.assertEqual(saved, [source.name])
+        self.assertEqual((self.session / source.name).read_bytes(), b"GUI data")
+        self.assertEqual(len(decisions), 1)
 
     def test_large_file_streams_without_crash(self) -> None:
         size = 16 * 1024 * 1024

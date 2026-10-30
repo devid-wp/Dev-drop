@@ -75,6 +75,25 @@ class GUITests(unittest.TestCase):
         self.assertIsNotNone(window.history_list)
         self.assertIsNotNone(window.drop_area)
 
+    def test_pending_request_buttons_use_selected_id(self) -> None:
+        import devdrop_gui
+        from PySide6.QtCore import Qt
+        window = self._track(devdrop_gui.MainWindow())
+        window.pending_list.addItem("file | Claimed sender | 5 B")
+        window.pending_list.item(0).setData(Qt.ItemDataRole.UserRole, "request-id")
+        window.pending_list.setCurrentRow(0)
+        with patch("devdrop_gui.background") as worker:
+            window.approve_button.click()
+            work = worker.call_args.args[1]
+            with patch.object(window.client, "transfer_request") as client:
+                work()
+                client.assert_called_once_with("POST", "/api/transfer-requests/request-id/approve")
+            window.reject_button.click()
+            work = worker.call_args.args[1]
+            with patch.object(window.client, "transfer_request") as client:
+                work()
+                client.assert_called_once_with("POST", "/api/transfer-requests/request-id/reject")
+
     def test_settings_dialog_constructs(self) -> None:
         import devdrop_gui
         from app.config import DevDropConfig

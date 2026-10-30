@@ -79,7 +79,14 @@ class AuthTests(unittest.TestCase):
         status, body = request("/api/pair", "POST", {"code": main.pairing_code})
         self.assertEqual(status, 200)
         token = json.loads(body)["token"]
-        status, body = request("/api/text", "POST", {"content": "hello"}, {"Authorization": f"Bearer {token}"})
+        from app.transfer_requests import TransferDescription
+        import hashlib
+        identity = main.transfer_service.create(token, TransferDescription(
+            type="text", sender="test", description="hello", size=5,
+            sha256=hashlib.sha256(b"hello").hexdigest()))["id"]
+        main.transfer_service.decide(identity, True)
+        status, body = request("/api/text", "POST", {"content": "hello"},
+                               {"Authorization": f"Bearer {token}", "X-Transfer-ID": identity})
         self.assertEqual(status, 200)
         self.assertEqual((self.root / json.loads(body)["filename"]).read_text(), "hello")
 
@@ -109,8 +116,10 @@ class AuthTests(unittest.TestCase):
         connection.getresponse.return_value.read.return_value = b'{"saved": ["source.txt"]}'
         sender = SimpleNamespace(window=lambda: SimpleNamespace(active_port=8765),
                                  _send_chunk=FileDropArea._send_chunk)
-        with patch.object(BackendClient, "transfer_token", return_value=token), patch(
+        with patch.object(BackendClient, "await_approval", return_value="approved-request") as approval, patch.object(BackendClient, "transfer_token", return_value=token), patch(
             "devdrop_gui.http.client.HTTPConnection", return_value=connection
         ):
             self.assertEqual(FileDropArea._upload_files(sender, [source]), ["source.txt"])
         connection.putheader.assert_any_call("Authorization", f"Bearer {token}")
+        connection.putheader.assert_any_call("X-Transfer-ID", "approved-request")
+        approval.assert_called_once_with([source], token)
