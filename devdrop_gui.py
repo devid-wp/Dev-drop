@@ -117,6 +117,17 @@ class BackendClient:
     def clear_history(self) -> dict[str, Any]:
         return self._request("DELETE", "/api/history")
 
+    def transfer_token(self) -> str:
+        # Use the same pairing flow as browsers, over loopback only.
+        code = self._request("GET", "/api/pairing-code")["code"]
+        request = urllib.request.Request(
+            f"{self.base_url}/api/pair",
+            data=json.dumps({"code": code}).encode("utf-8"),
+            headers={"Content-Type": "application/json"}, method="POST",
+        )
+        with urllib.request.urlopen(request, timeout=REQUEST_TIMEOUT_SECONDS) as response:
+            return json.loads(response.read().decode("utf-8"))["token"]
+
     def _request(self, method: str, path: str) -> dict[str, Any]:
         request = urllib.request.Request(f"{self.base_url}{path}", method=method)
         with urllib.request.urlopen(request, timeout=REQUEST_TIMEOUT_SECONDS) as response:
@@ -156,6 +167,7 @@ class BackendManager:
         server_config = uvicorn.Config(
             backend.app,
             host=HOST,
+            proxy_headers=False,
             port=self.config.port,
             log_level="warning",
             log_config=None,
@@ -366,6 +378,7 @@ class FileDropArea(QFrame):
         self.hint.setText(f"Sent {len(saved)} file(s)")
 
     def _upload_files(self, files: list[Path]) -> list[str]:
+        token = BackendClient(self.window().active_port).transfer_token()
         boundary = f"----DevDrop{os.urandom(12).hex()}"
         connection = http.client.HTTPConnection(
             "127.0.0.1", self.window().active_port, timeout=60
@@ -373,6 +386,7 @@ class FileDropArea(QFrame):
         connection.putrequest("POST", "/api/upload")
         connection.putheader("Content-Type", f"multipart/form-data; boundary={boundary}")
         connection.putheader("Transfer-Encoding", "chunked")
+        connection.putheader("Authorization", f"Bearer {token}")
         connection.endheaders()
         try:
             for file in files:

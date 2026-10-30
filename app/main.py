@@ -7,7 +7,7 @@ import time
 from datetime import datetime, timezone
 from pathlib import Path
 
-from fastapi import FastAPI, File, HTTPException, Request, UploadFile
+from fastapi import Depends, FastAPI, File, HTTPException, Request, UploadFile
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
@@ -308,7 +308,9 @@ async def clear_transfer_history(request: Request):
 
 
 @app.get("/api/pairing-code")
-async def get_pairing_code():
+async def get_pairing_code(request: Request):
+    if not _is_local_request(request):
+        raise HTTPException(status_code=403, detail="Management endpoint is local-only")
     if not pairing_is_valid():
         generate_pairing_code()
 
@@ -354,7 +356,17 @@ async def pair_device(pair: PairRequest, request: Request):
     return {"paired": True, "token": token}
 
 
-@app.post("/api/text")
+async def require_transfer_session(request: Request) -> None:
+    """Require an existing session for every sender, including loopback clients."""
+    scheme, _, token = request.headers.get("Authorization", "").partition(" ")
+    if scheme.lower() != "bearer" or not token or not session_is_valid(token):
+        raise HTTPException(
+            status_code=401, detail="Invalid or expired session",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+
+
+@app.post("/api/text", dependencies=[Depends(require_transfer_session)])
 async def receive_text(request: TextRequest):
     session_dir = require_session_dir()
     content = request.content.strip()
@@ -381,7 +393,7 @@ async def receive_text(request: TextRequest):
     return {"success": True, "filename": file_path.name}
 
 
-@app.post("/api/upload")
+@app.post("/api/upload", dependencies=[Depends(require_transfer_session)])
 def receive_file(request: Request, files: list[UploadFile] = File(...)):
     session_dir = require_session_dir()
     saved_files: list[str] = []
@@ -421,4 +433,4 @@ def receive_file(request: Request, files: list[UploadFile] = File(...)):
 
 def _is_local_request(request: Request) -> bool:
     host = request.client.host if request.client else ""
-    return host in {"127.0.0.1", "::1", "localhost"}
+    return host in {"127.0.0.1", "::1"}

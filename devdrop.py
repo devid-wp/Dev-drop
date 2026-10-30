@@ -84,6 +84,7 @@ def main() -> None:
         uvicorn.run(
             backend.app,
             host=HOST,
+            proxy_headers=False,
             port=PORT,
             log_level="warning",
         )

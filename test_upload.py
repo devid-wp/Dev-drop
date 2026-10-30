@@ -25,6 +25,7 @@ import uvicorn  # noqa: E402
 import app.main as backend  # noqa: E402
 
 PORT = 18771
+TOKEN = ""
 BOUNDARY_TAG = "----DevDropTests"
 _SERVER: uvicorn.Server | None = None
 
@@ -53,7 +54,7 @@ def _stop_server() -> None:
 def _post(body: bytes, content_type: str) -> tuple[int, dict]:
     conn = http.client.HTTPConnection("127.0.0.1", PORT)
     try:
-        conn.request("POST", "/api/upload", body=body, headers={"Content-Type": content_type})
+        conn.request("POST", "/api/upload", body=body, headers={"Content-Type": content_type, "Authorization": f"Bearer {TOKEN}"})
         resp = conn.getresponse()
         payload = resp.read().decode("utf-8")
         import json
@@ -95,6 +96,7 @@ def _chunked_upload(filename: str, size_bytes: int, chunk_size: int = 1024 * 102
     conn.putrequest("POST", "/api/upload")
     conn.putheader("Content-Type", f"multipart/form-data; boundary={boundary}")
     conn.putheader("Transfer-Encoding", "chunked")
+    conn.putheader("Authorization", f"Bearer {TOKEN}")
     conn.endheaders()
 
     def send(data: bytes) -> None:
@@ -123,6 +125,9 @@ def _chunked_upload(filename: str, size_bytes: int, chunk_size: int = 1024 * 102
 class UploadIntegrationTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls) -> None:
+        global TOKEN
+        TOKEN = backend.create_session()
+        cls.addClassCleanup(backend.sessions.pop, TOKEN, None)
         cls.root = Path(tempfile.mkdtemp(prefix="devdrop-test-"))
         cls.session = cls.root / "session"
         cls.session.mkdir()

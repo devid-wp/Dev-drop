@@ -25,6 +25,7 @@ const transferStatus = document.querySelector("#transfer-status");
 const discoveredServers = document.querySelector("#discovered-servers");
 const serverList = document.querySelector("#server-list");
 
+let sessionToken = null;
 let currentMode = "text";
 let selectedFiles = [];
 let previewUrl = null;
@@ -96,6 +97,10 @@ pairingForm.addEventListener("submit", async (event) => {
             throw new Error(data.detail || "Pairing failed");
         }
 
+        if (!data.paired || typeof data.token !== "string" || !data.token) {
+            throw new Error("Pairing failed");
+        }
+        sessionToken = data.token;
         showPairingStatus("Connected ✓", false);
         pairingButton.textContent = "Connected";
         pairingInput.disabled = true;
@@ -169,7 +174,7 @@ async function sendText() {
     setSending();
 
     try {
-        const response = await fetch("/api/text", {
+        const response = await authorizedFetch("/api/text", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({ content }),
@@ -202,7 +207,7 @@ async function sendFile() {
     }
 
     try {
-        const response = await fetch("/api/upload", {
+        const response = await authorizedFetch("/api/upload", {
             method: "POST",
             body: formData,
         });
@@ -301,7 +306,36 @@ function showPairingStatus(message, isError) {
     status.classList.toggle("error", isError);
 }
 
+function returnToPairing() {
+    sessionToken = null;
+    transferScreen.classList.add("hidden");
+    pairingScreen.classList.remove("hidden");
+    pairingInput.disabled = false;
+    pairingInput.value = "";
+    pairingButton.disabled = false;
+    pairingButton.textContent = "Connect";
+    resetSendFeedback();
+    showPairingStatus("Session expired. Connect again.", true);
+}
+
+async function authorizedFetch(url, options) {
+    if (!sessionToken) {
+        returnToPairing();
+        throw new Error("Connect again");
+    }
+    const response = await fetch(url, {
+        ...options,
+        headers: { ...options.headers, Authorization: `Bearer ${sessionToken}` },
+    });
+    if (response.status === 401) {
+        returnToPairing();
+        throw new Error("Session expired. Connect again.");
+    }
+    return response;
+}
+
 function openTransferScreen() {
+    if (!sessionToken) return;
     pairingScreen.classList.add("hidden");
     transferScreen.classList.remove("hidden");
     textContent.focus();
