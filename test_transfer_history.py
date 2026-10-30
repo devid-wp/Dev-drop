@@ -1,4 +1,3 @@
-import json
 import tempfile
 import unittest
 from pathlib import Path
@@ -23,8 +22,9 @@ class TransferHistoryTests(unittest.TestCase):
                 self.assertEqual(history[-1]["sender_ip"], "192.168.0.15")
                 self.assertIn("timestamp", history[-1])
 
-                reloaded = json.loads(history_file.read_text(encoding="utf-8"))
-                self.assertEqual(reloaded, history)
+                self.assertFalse(history_file.exists())
+                self.assertTrue(history_file.with_suffix(".sqlite3").exists())
+                self.assertEqual(main.load_transfer_history(), history)
 
     def test_clear_history_removes_saved_transfers(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:
@@ -34,7 +34,7 @@ class TransferHistoryTests(unittest.TestCase):
                 main.save_transfer_history([])
 
                 self.assertEqual(main.load_transfer_history(), [])
-                self.assertEqual(json.loads(history_file.read_text(encoding="utf-8")), [])
+                self.assertFalse(history_file.exists())
 
     def test_initialize_session_stats_uses_incremental_totals(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:

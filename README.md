@@ -167,3 +167,33 @@ Possible future improvements:
 ## License
 
 MIT
+## Transfer history storage
+
+History uses the standard-library SQLite driver. The database is
+`transfer_history.sqlite3` beside the legacy `transfer_history.json`: the GUI
+uses the configured session root; callers without `HISTORY_PATH` use the current
+session directory. It is created lazily on the first history read or write.
+The existing API returns the most recent 20 records in insertion order, and the
+GUI continues to show newest first. SQLite retains older metadata until an
+explicit history clear. File contents are never stored in the database.
+
+The first database operation validates and imports the legacy JSON in one
+transaction, together with a completion marker. All objects and extra metadata
+fields are preserved, and the source file is never changed or removed. Reopening
+or clearing the database does not repeat the import. An absent JSON is recorded
+as a completed empty import; a JSON added later is not imported automatically.
+Invalid JSON, invalid known field types, unsupported schema versions and storage
+errors raise a history error (HTTP 503), rather than silently clearing data.
+After correcting a failed import's source, retry the operation. Do not delete a
+working database to retry migration: that also deletes its completion marker.
+
+Connections are opened and closed per operation. `BEGIN IMMEDIATE`, parameterized
+inserts and a 10-second lock timeout protect concurrent writers. Schema version
+1 is recorded with `PRAGMA user_version`. Metadata objects are encoded as JSON
+text inside rows to preserve legacy fields without introducing a device model.
+
+History deletion clears SQLite records, but deliberately leaves the original
+JSON backup intact. Filesystem file saves and SQLite commits are separate:
+a history failure after a successful file save can return 503 even though the
+file exists. There is no automatic reconciliation at this stage. Back up both
+the SQLite database and the legacy JSON while the application is stopped.

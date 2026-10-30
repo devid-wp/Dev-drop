@@ -1,5 +1,4 @@
 import asyncio
-import json
 import secrets
 import shutil
 import sys
@@ -8,10 +7,11 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from fastapi import Depends, FastAPI, File, HTTPException, Request, UploadFile
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
+from app.history_store import HistoryStore, HistoryStoreError
 from app.discovery import DiscoveryService
 from app.uploads import open_unique_upload, safe_upload_name
 
@@ -133,45 +133,34 @@ def require_session_dir() -> Path:
 
 def history_path() -> Path:
     if HISTORY_PATH is not None:
-        HISTORY_PATH.parent.mkdir(parents=True, exist_ok=True)
         return HISTORY_PATH
     return require_session_dir() / "transfer_history.json"
 
 
+def history_store() -> HistoryStore:
+    legacy = history_path()
+    return HistoryStore(legacy.with_suffix(".sqlite3"), legacy)
+
+
 def load_transfer_history() -> list[dict[str, object]]:
-    path = history_path()
-    try:
-        data = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
-        return []
-    if not isinstance(data, list):
-        return []
-    return [item for item in data if isinstance(item, dict)][-20:]
+    return history_store().read()
 
 
 def save_transfer_history(history: list[dict[str, object]]) -> None:
-    path = history_path()
-    temporary_path = path.with_suffix(".tmp")
-    temporary_path.write_text(
-        json.dumps(history[-20:], ensure_ascii=False, indent=2),
-        encoding="utf-8",
-    )
-    temporary_path.replace(path)
+    history_store().replace(history[-20:])
 
 
 def record_transfers(files: list[tuple[str, int]], sender_ip: str) -> None:
-    history = load_transfer_history()
     timestamp = datetime.now(timezone.utc).isoformat()
-    history.extend(
-        {
-            "filename": filename,
-            "size": size,
-            "timestamp": timestamp,
-            "sender_ip": sender_ip,
-        }
+    history_store().append([
+        {"filename": filename, "size": size, "timestamp": timestamp, "sender_ip": sender_ip}
         for filename, size in files
-    )
-    save_transfer_history(history)
+    ])
+
+
+@app.exception_handler(HistoryStoreError)
+async def history_unavailable(request: Request, error: HistoryStoreError):
+    return JSONResponse(status_code=503, content={"detail": "Transfer history is unavailable"})
 
 
 def initialize_session_stats(session_dir: Path) -> None:
