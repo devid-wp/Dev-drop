@@ -29,6 +29,10 @@ const incomingFiles = document.querySelector("#incoming-files");
 const incomingStatus = document.querySelector("#incoming-status");
 let incomingTimer = null;
 let incomingBusy = false;
+const relayRecipient = document.querySelector("#relay-recipient");
+const relayOutgoing = document.querySelector("#relay-outgoing");
+let activeRelay = null;
+let fileSendBusy = false;
 let sessionToken = null;
 let currentMode = "text";
 let selectedFiles = [];
@@ -184,16 +188,18 @@ async function sha256(buffer) {
 }
 
 async function requestApproval(description) {
-    const response = await authorizedFetch("/api/transfer-requests", {
+    const relay = Boolean(description.recipient_id);
+    const response = await authorizedFetch(relay ? "/api/relays" : "/api/transfer-requests", {
         method: "POST", headers: {"Content-Type": "application/json"},
         body: JSON.stringify({sender: "Browser (unverified)", ...description}),
     });
     if (!response.ok) throw new Error("Could not request approval");
     const transfer = await response.json();
+    if (relay) activeRelay = {id: transfer.id, controller: new AbortController()};
     sendButton.textContent = "Waiting for approval...";
     const deadline = Date.now() + 125000;
     while (Date.now() < deadline) {
-        const status = await authorizedFetch(`/api/transfer-requests/${transfer.id}`, {});
+        const status = await authorizedFetch(`${relay ? "/api/relays" : "/api/transfer-requests"}/${transfer.id}`, {});
         if (!status.ok) throw new Error("Transfer request unavailable");
         const current = await status.json();
         if (current.status === "approved" && !current.used) return transfer.id;
@@ -238,11 +244,19 @@ async function sendText() {
 }
 
 async function sendFile() {
+    if (fileSendBusy) return;
     if (!selectedFiles || selectedFiles.length === 0) {
         showTransferError("Choose a file first");
         return;
     }
 
+    const recipient = relayRecipient.value;
+    if (recipient && selectedFiles.length !== 1) {
+        showTransferError("Choose exactly one file for relay");
+        return;
+    }
+    fileSendBusy = true;
+    relayRecipient.disabled = true;
     setSending();
     const files = selectedFiles.slice();
     const formData = new FormData();
@@ -257,10 +271,13 @@ async function sendFile() {
             manifest.push({name: file.name, size: file.size, sha256: await sha256(await file.arrayBuffer())});
         }
         const identity = await requestApproval({type: "file", description: files.map(f => f.name).join(", ").slice(0, 500),
-            size: files.reduce((total, file) => total + file.size, 0), files: manifest});
-        const response = await authorizedFetch("/api/upload", {
+            size: files.reduce((total, file) => total + file.size, 0), files: manifest,
+            ...(recipient ? {recipient_id: recipient} : {})});
+        if (recipient) transferStatus.textContent = "Uploading through computer...";
+        const response = await authorizedFetch(recipient ? `/api/relays/${identity}/upload` : "/api/upload", {
             method: "POST",
-            headers: {"X-Transfer-ID": identity},
+            signal: recipient ? activeRelay.controller.signal : undefined,
+            headers: recipient ? {} : {"X-Transfer-ID": identity},
             body: formData,
         });
 
@@ -272,8 +289,17 @@ async function sendFile() {
         const data = await response.json();
         clearSelectedFile();
         showSent();
+        if (recipient) {
+            sendButton.textContent = "Offered";
+            transferStatus.textContent = "Uploaded to computer. Waiting for recipient Accept.";
+            refreshIncoming();
+        }
     } catch (error) {
-        showSendFailure(error.message || "Could not send file");
+        showSendFailure(error.name === "AbortError" ? "Relay cancelled" : (error.message || "Could not send file"));
+    } finally {
+        fileSendBusy = false;
+        relayRecipient.disabled = false;
+        activeRelay = null;
     }
 }
 
@@ -362,6 +388,8 @@ function returnToPairing() {
     window.clearInterval(incomingTimer);
     incomingTimer = null;
     incomingFiles.replaceChildren();
+    relayOutgoing.replaceChildren();
+    relayRecipient.replaceChildren();
     document.querySelector("#incoming-session").textContent = "";
     sessionToken = null;
     transferScreen.classList.add("hidden");
@@ -434,10 +462,56 @@ async function refreshIncoming() {
             }
             incomingFiles.appendChild(row);
         }
+        await refreshRelayState(token);
     } catch (error) {
         incomingStatus.textContent = error.message || "Incoming files unavailable";
     } finally {
         incomingBusy = false;
+    }
+}
+
+async function refreshRelayState(token) {
+    const recipients = await authorizedFetch("/api/relay-recipients", {cache: "no-store"});
+    const outgoing = await authorizedFetch("/api/relays", {cache: "no-store"});
+    if (!recipients.ok || !outgoing.ok) throw new Error("Relay state unavailable");
+    const peers = await recipients.json();
+    const transfers = await outgoing.json();
+    if (token !== sessionToken) return;
+    const selected = relayRecipient.value;
+    relayRecipient.replaceChildren();
+    const local = document.createElement("option");
+    local.value = "";
+    local.textContent = "This computer";
+    relayRecipient.appendChild(local);
+    for (const peer of peers.sessions || []) {
+        const option = document.createElement("option");
+        option.value = peer.id;
+        option.textContent = `Session ${peer.id.slice(0, 8)}`;
+        relayRecipient.appendChild(option);
+    }
+    relayRecipient.value = (peers.sessions || []).some(peer => peer.id === selected) ? selected : "";
+    relayOutgoing.replaceChildren();
+    for (const relay of transfers.relays || []) {
+        const row = document.createElement("div");
+        const label = document.createElement("p");
+        label.textContent = `${relay.filename} → session ${relay.recipient_id.slice(0, 8)}: ${relay.status}`;
+        row.appendChild(label);
+        if (["pending", "approved", "uploading", "offered", "accepted", "streaming"].includes(relay.status)) {
+            const cancel = document.createElement("button");
+            cancel.type = "button";
+            cancel.textContent = "Cancel relay";
+            cancel.addEventListener("click", async () => {
+                try {
+                    const response = await authorizedFetch(`/api/relays/${encodeURIComponent(relay.id)}/cancel`, {method: "POST"});
+                    if (!response.ok) throw new Error("Relay can no longer be cancelled");
+                    if (activeRelay?.id === relay.id) activeRelay.controller.abort();
+                    transferStatus.textContent = "Relay cancelled";
+                    refreshIncoming();
+                } catch (error) { showTransferError(error.message); }
+            });
+            row.appendChild(cancel);
+        }
+        relayOutgoing.appendChild(row);
     }
 }
 

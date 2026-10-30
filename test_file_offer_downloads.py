@@ -17,7 +17,7 @@ from app.transport import TLSSettings
 from tls_test_support import PASSWORD, make_pki
 
 
-class FileOfferDownloadTests(unittest.TestCase):
+class FileOfferTLSFixture:
     @classmethod
     def setUpClass(cls):
         directory = tempfile.TemporaryDirectory(prefix='devdrop-download-test-')
@@ -75,8 +75,8 @@ class FileOfferDownloadTests(unittest.TestCase):
         self.assertEqual(status, 200, body)
         return json.loads(body)['id']
 
-    def accept(self, identity):
-        status, headers, body = self.call('POST', f'/api/incoming-offers/{identity}/accept', token=self.token)
+    def accept(self, identity, token=None):
+        status, headers, body = self.call('POST', f'/api/incoming-offers/{identity}/accept', token=token or self.token)
         self.assertEqual(status, 200, body)
         cookie = SimpleCookie()
         cookie.load(headers['set-cookie'])
@@ -89,6 +89,9 @@ class FileOfferDownloadTests(unittest.TestCase):
         self.assertNotIn(value.value.encode(), body)
         return value.OutputString(attrs=[])
 
+
+
+class FileOfferDownloadTests(FileOfferTLSFixture, unittest.TestCase):
     def test_accept_native_download_and_replay(self):
         identity = self.offer()
         path = f'/api/incoming-offers/{identity}/download'

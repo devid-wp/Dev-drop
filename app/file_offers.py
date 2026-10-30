@@ -30,10 +30,12 @@ class FileOffer:
     snapshot: Path
     status: str = "pending"
     grant_hash: str | None = None
+    sender: str = "Computer owner"
+    expire_stream: bool = False
 
     def public(self):
         return {"id": self.id, "recipient_id": self.recipient_id,
-                "filename": self.filename, "size": self.size, "sender": "Computer owner",
+                "filename": self.filename, "size": self.size, "sender": self.sender,
                 "created_at": self.created_at, "expires_at": self.expires_at, "status": self.status}
 
 
@@ -62,15 +64,33 @@ class FileOfferService:
     def _sweep(self):
         now = self.clock()
         for offer in list(self._offers.values()):
-            if offer.expires_at <= now and offer.status in {"pending", "accepted"}:
+            if offer.expires_at <= now and (offer.status in {"preparing", "pending", "accepted"} or (offer.status == "streaming" and offer.expire_stream)):
                 offer.status, offer.grant_hash = "expired", None
-            if offer.status not in {"pending", "accepted", "streaming"}:
+            if offer.status not in {"preparing", "pending", "accepted", "streaming"}:
                 self._remove(offer)
                 if now > offer.expires_at + 3600 and not offer.snapshot.exists():
                     self._offers.pop(offer.id, None)
 
     def create(self, source: Path, recipient: str, recipient_id: str):
-        # Reserve a bounded slot; disk copying must not hold the state lock.
+        try:
+            if source.is_symlink() or not stat.S_ISREG(source.stat().st_mode):
+                raise OfferError("Choose a regular readable file, not a symbolic link")
+            flags = getattr(os, "O_NONBLOCK", 0) | os.O_RDONLY | getattr(os, "O_BINARY", 0) | getattr(os, "O_NOFOLLOW", 0)
+            with os.fdopen(os.open(source, flags), "rb") as incoming:
+                before = os.fstat(incoming.fileno())
+                if not stat.S_ISREG(before.st_mode):
+                    raise OfferError("Choose a regular readable file")
+                def validate():
+                    after = os.fstat(incoming.fileno())
+                    if (before.st_size, before.st_mtime_ns) != (after.st_size, after.st_mtime_ns):
+                        raise OfferError("File changed while preparing the offer; try again")
+                return self.create_stream(incoming, source.name, recipient, recipient_id, validate=validate)
+        except OSError as error:
+            raise OfferError("File is missing or unavailable") from error
+
+    def create_stream(self, incoming, filename, recipient, recipient_id, *, validate=None,
+                      deadline=None, sender="Computer owner", published=True):
+        """Copy a server-owned stream; no remote request can choose its path."""
         with self._lock:
             self._sweep()
             if len(self._offers) + self._preparing >= 100:
@@ -82,36 +102,54 @@ class FileOfferService:
             self._preparing += 1
         snapshot = None
         try:
-            if source.is_symlink():
-                raise OfferError("Choose a regular file, not a symbolic link")
-            if not stat.S_ISREG(source.stat().st_mode):
-                raise OfferError("Choose a regular readable file")
-            flags = getattr(os, "O_NONBLOCK", 0) | os.O_RDONLY | getattr(os, "O_BINARY", 0) | getattr(os, "O_NOFOLLOW", 0)
-            with os.fdopen(os.open(source, flags), "rb") as incoming:
-                if not stat.S_ISREG(os.fstat(incoming.fileno()).st_mode):
-                    raise OfferError("Choose a regular readable file")
-                before = os.fstat(incoming.fileno())
-                with tempfile.NamedTemporaryFile(dir=root, delete=False) as output:
-                    snapshot = Path(output.name)
-                    shutil.copyfileobj(incoming, output, length=256 * 1024)
-                after = os.fstat(incoming.fileno())
-                if (before.st_size, before.st_mtime_ns) != (after.st_size, after.st_mtime_ns):
-                    raise OfferError("File changed while preparing the offer; try again")
+            with tempfile.NamedTemporaryFile(dir=root, delete=False) as output:
+                snapshot = Path(output.name)
+                shutil.copyfileobj(incoming, output, length=256 * 1024)
+            if validate is not None:
+                validate()
             with self._lock:
                 now = self.clock()
+                expires = min(now + self.lifetime, deadline) if deadline is not None else now + self.lifetime
+                if expires <= now:
+                    raise OfferError("File offer expired during preparation")
                 offer = FileOffer(secrets.token_urlsafe(24), recipient, recipient_id,
-                                  safe_upload_name(source.name), snapshot.stat().st_size,
-                                  now, now + self.lifetime, snapshot)
+                                  safe_upload_name(filename), snapshot.stat().st_size,
+                                  now, expires, snapshot, status="pending" if published else "preparing",
+                                  sender=sender, expire_stream=deadline is not None)
                 self._offers[offer.id] = offer
                 snapshot = None
                 return offer.public()
         except OSError as error:
-            raise OfferError("File is missing or unavailable") from error
+            raise OfferError("Cannot prepare the offered file") from error
         finally:
             with self._lock:
                 self._preparing -= 1
             if snapshot is not None:
                 snapshot.unlink(missing_ok=True)
+
+    def publish(self, identity):
+        with self._lock:
+            offer = self._get(identity)
+            if offer.status != "preparing":
+                raise OfferError("File offer is unavailable")
+            offer.status = "pending"
+
+    def discard_prepared(self, identity):
+        with self._lock:
+            offer = self._get(identity)
+            if offer.status not in {"preparing", "expired", "cancelled"}:
+                raise OfferError("Published file offer cannot be discarded")
+            self._remove(offer)
+            self._offers.pop(identity, None)
+
+    def state(self, identity):
+        with self._lock:
+            return self._get(identity).public()
+
+    def check_streaming(self, identity):
+        with self._lock:
+            if self._get(identity).status != "streaming":
+                raise OfferError("Download was cancelled or expired")
 
     def _get(self, identity, recipient=None):
         self._sweep()
@@ -124,7 +162,7 @@ class FileOfferService:
         with self._lock:
             self._sweep()
             return [offer.public() for offer in self._offers.values()
-                    if recipient is None or offer.recipient == recipient]
+                    if offer.status != "preparing" and (recipient is None or offer.recipient == recipient)]
 
     def accept(self, identity, recipient):
         with self._lock:
@@ -148,7 +186,7 @@ class FileOfferService:
     def cancel(self, identity):
         with self._lock:
             offer = self._get(identity)
-            if offer.status not in {"pending", "accepted"}:
+            if offer.status not in {"preparing", "pending", "accepted"} and not (offer.status == "streaming" and offer.expire_stream):
                 raise OfferError("File offer cannot be cancelled")
             offer.status, offer.grant_hash = "cancelled", None
             self._remove(offer)

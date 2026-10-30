@@ -16,6 +16,7 @@ from urllib.parse import urlsplit
 from app.transfer_requests import TransferDescription, TransferError, TransferService
 
 from app.file_offers import FileOfferService, OfferError
+from app.relay import RelayCreate, RelayError, RelayService
 from app.history_store import HistoryStore, HistoryStoreError
 from app.discovery import DiscoveryService
 from app.uploads import open_unique_upload, safe_upload_name
@@ -102,6 +103,9 @@ def session_is_valid(token: str) -> bool:
         return False
 
     return True
+
+
+relay_service = RelayService(transfer_service, file_offers, lambda token: session_is_valid(token))
 
 
 def generate_pairing_code() -> str:
@@ -384,8 +388,17 @@ async def gate_transfer_body(request: Request, call_next):
             return JSONResponse(status_code=error.status_code, content={"detail": error.detail}, headers=error.headers)
         except TransferError as error:
             return JSONResponse(status_code=409, content={"detail": str(error)})
+    parts = request.url.path.strip("/").split("/")
+    if request.method == "POST" and len(parts) == 4 and parts[:2] == ["api", "relays"] and parts[3] == "upload":
+        try:
+            token = await require_transfer_session(request)
+            relay_service.check_upload(parts[2], token)
+        except HTTPException as error:
+            return JSONResponse(status_code=error.status_code, content={"detail": error.detail}, headers=error.headers)
+        except (RelayError, TransferError) as error:
+            return JSONResponse(status_code=409, content={"detail": str(error)})
     response = await call_next(request)
-    if request.url.path.startswith(("/api/incoming-offers", "/api/outgoing-offers", "/api/recipient-sessions")):
+    if request.url.path.startswith(("/api/incoming-offers", "/api/outgoing-offers", "/api/recipient-sessions", "/api/relays", "/api/relay-recipients")):
         response.headers["Cache-Control"] = "no-store"
     return response
 
@@ -397,6 +410,8 @@ async def transfer_error(request: Request, error: TransferError):
 
 @app.post("/api/transfer-requests")
 async def create_transfer(description: TransferDescription, token: str = Depends(require_transfer_session)):
+    if description.recipient_id is not None:
+        raise TransferError("Use the relay API to bind a recipient")
     return transfer_service.create(token, description)
 
 
@@ -534,7 +549,11 @@ async def download_file_offer(identity: str, request: Request):
     def stream():
         complete = False
         try:
-            while chunk := source.read(256 * 1024):
+            while True:
+                file_offers.check_streaming(identity)
+                chunk = source.read(256 * 1024)
+                if not chunk:
+                    break
                 yield chunk
             complete = True
         finally:
@@ -552,6 +571,60 @@ async def download_file_offer(identity: str, request: Request):
     response.delete_cookie("__Secure-dd_download_" + identity, path=f"/api/incoming-offers/{identity}/download",
                            secure=True, httponly=True, samesite="strict")
     return response
+
+
+@app.exception_handler(RelayError)
+async def relay_error(request: Request, error: RelayError):
+    return JSONResponse(status_code=409, content={"detail": str(error)})
+
+
+@app.get("/api/relay-recipients")
+async def relay_recipients(token: str = Depends(require_transfer_session)):
+    cleanup_expired_sessions()
+    return {"sessions": [{"id": recipient_id(other)} for other in list(sessions) if other != token]}
+
+
+@app.post("/api/relays")
+async def create_relay(description: RelayCreate, token: str = Depends(require_transfer_session)):
+    target = next((other for other in list(sessions) if recipient_id(other) == description.recipient_id and session_is_valid(other)), None)
+    if target is None:
+        raise RelayError("Recipient session is unavailable")
+    return relay_service.create(token, target, recipient_id(token), description)
+
+
+@app.get("/api/relays")
+async def sent_relays(token: str = Depends(require_transfer_session)):
+    return {"relays": relay_service.list(token)}
+
+
+@app.get("/api/relays/{identity}")
+async def relay_state(identity: str, token: str = Depends(require_transfer_session)):
+    return relay_service.state(identity, token)
+
+
+@app.post("/api/relays/{identity}/cancel")
+async def cancel_relay(identity: str, token: str = Depends(require_transfer_session)):
+    return relay_service.cancel(identity, token)
+
+
+def upload_manifest(files):
+    manifest = []
+    for file in files:
+        digest = hashlib.sha256()
+        size = 0
+        while chunk := file.file.read(TRANSFER_COPY_BUFFER_SIZE):
+            digest.update(chunk)
+            size += len(chunk)
+        file.file.seek(0)
+        manifest.append({"name": file.filename, "size": size, "sha256": digest.hexdigest()})
+    return manifest
+
+
+@app.post("/api/relays/{identity}/upload")
+def upload_relay(identity: str, files: list[UploadFile] = File(...), token: str = Depends(require_transfer_session)):
+    if len(files) != 1:
+        raise RelayError("Choose exactly one file for relay")
+    return relay_service.upload(identity, token, upload_manifest(files), files[0].file)
 
 
 @app.post("/api/text", dependencies=[Depends(require_transfer_session)])
@@ -586,15 +659,7 @@ async def receive_text(request: TextRequest, http_request: Request, token: str =
 
 @app.post("/api/upload", dependencies=[Depends(require_transfer_session)])
 def receive_file(request: Request, files: list[UploadFile] = File(...), token: str = Depends(require_transfer_session)):
-    manifest = []
-    for file in files:
-        digest = hashlib.sha256()
-        size = 0
-        while chunk := file.file.read(TRANSFER_COPY_BUFFER_SIZE):
-            digest.update(chunk)
-            size += len(chunk)
-        file.file.seek(0)
-        manifest.append({"name": file.filename, "size": size, "sha256": digest.hexdigest()})
+    manifest = upload_manifest(files)
     transfer_service.consume(request.headers.get("X-Transfer-ID", ""), token, "file",
                              sum(item["size"] for item in manifest), files=manifest)
     session_dir = require_session_dir()

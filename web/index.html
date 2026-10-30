@@ -72,6 +72,9 @@
     <!-- FILE -->
 
     <div class="transfer-panel hidden" id="file-panel">
+        <label for="relay-recipient">Recipient</label>
+        <select id="relay-recipient"><option value="">This computer</option></select>
+        <p>For another browser, choose its session ID. Relay sends one file at a time.</p>
         <div class="drop-zone" id="drop-zone">
             <div class="empty-file-state" id="empty-file-state">
                 <p class="drop-title">Choose a file</p>
@@ -135,6 +138,11 @@
     </button>
 
     <p class="transfer-status" id="transfer-status" aria-live="polite"></p>
+
+    <section aria-label="Relayed files">
+        <h2>Sending through this computer</h2>
+        <div id="relay-outgoing"></div>
+    </section>
 
     <section aria-label="Incoming files">
         <h2>Incoming files</h2>

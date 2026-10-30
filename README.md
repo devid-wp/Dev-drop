@@ -265,3 +265,10 @@ phone CA installation, encrypted keys and certificate renewal.
 Pair the phone, match its session ID in the desktop's **Send to browser** section,
 and offer a chosen file. On the phone use **Incoming files -> Accept -> Download**.
 See [PC-to-browser behavior, APIs and limits](docs/PC_TO_BROWSER.md).
+
+## Relay between paired phone browsers
+
+On phone A choose one file and phone B's session under **Recipient**. The computer
+owner must approve the relay; B must then **Accept -> Download**. A can follow or
+cancel it in **Sending through this computer**. Existing **This computer** uploads
+and PC-to-browser offers remain available. See [relay flow and limits](docs/RELAY.md).

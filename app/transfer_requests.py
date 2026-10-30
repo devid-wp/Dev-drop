@@ -20,6 +20,7 @@ class TransferDescription(BaseModel):
     description: str = Field(min_length=1, max_length=500)
     size: int | None = Field(default=None, ge=0)
     sha256: str | None = Field(default=None, pattern=r"^[a-f0-9]{64}$")
+    recipient_id: str | None = Field(default=None, pattern=r"^[a-f0-9]{64}$")
     files: list[FileDescription] = Field(default_factory=list, max_length=100)
 
     @model_validator(mode="after")
@@ -33,6 +34,8 @@ class TransferDescription(BaseModel):
             self.size = total
         elif self.files or self.sha256 is None:
             raise ValueError("Text and links require a content digest")
+        if self.recipient_id is not None and (self.type != "file" or len(self.files) != 1):
+            raise ValueError("Relay requires exactly one file")
         return self
 
 
@@ -117,19 +120,19 @@ class TransferService:
             item.status = "cancelled"
             return item.public()
 
-    def check_approved(self, identity, session):
+    def check_approved(self, identity, session, recipient_id=None):
         with self._lock:
             item = self._get(identity, session)
-            if item.status != "approved" or item.used:
+            if item.status != "approved" or item.used or item.content.get("recipient_id") != recipient_id:
                 raise TransferError("Transfer is not approved or was already used")
 
-    def consume(self, identity, session, kind, size, digest=None, files=None):
+    def consume(self, identity, session, kind, size, digest=None, files=None, recipient_id=None):
         with self._lock:
             item = self._get(identity, session)
             expected = item.content
             if item.status != "approved" or item.used:
                 raise TransferError("Transfer is not approved or was already used")
-            if (expected["type"] != kind or
+            if (expected.get("recipient_id") != recipient_id or expected["type"] != kind or
                 (expected["size"] is not None and expected["size"] != size) or
                 expected["sha256"] != digest or expected["files"] != (files or [])):
                 raise TransferError("Transfer content does not match approval")

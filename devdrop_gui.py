@@ -968,6 +968,8 @@ class MainWindow(QMainWindow):
             for transfer in data.get("requests", []):
                 size = format_bytes(transfer["size"]) if transfer["size"] is not None else "unknown size"
                 text = f"{transfer['type']} | {transfer['sender']} | {size}\n{transfer['description']}"
+                if transfer.get("recipient_id"):
+                    text += "\nRelay recipient: " + transfer["recipient_id"][:8]
                 if transfer["files"]:
                     text += "\n" + ", ".join(item["name"] for item in transfer["files"])
                 self.pending_list.addItem(text)
