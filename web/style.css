@@ -510,6 +510,26 @@ button:disabled {
     color: #ef6a6a;
 }
 
+.send-progress {
+    display: block;
+    width: min(100%, 420px);
+    height: 8px;
+    margin: 8px auto;
+    accent-color: var(--purple);
+}
+
+#incoming-files progress {
+    display: block;
+    width: 100%;
+    height: 8px;
+    accent-color: var(--purple);
+}
+
+.download-progress-detail {
+    color: var(--muted);
+    font-size: 12px;
+}
+
 .connection-status {
     display: flex;
     align-items: center;

@@ -22,6 +22,7 @@ const imagePreview = document.querySelector("#image-preview");
 const removeFileButton = document.querySelector("#remove-file");
 const sendButton = document.querySelector("#send-button");
 const transferStatus = document.querySelector("#transfer-status");
+const sendProgress = document.querySelector("#send-progress");
 const discoveredServers = document.querySelector("#discovered-servers");
 const serverList = document.querySelector("#server-list");
 
@@ -29,6 +30,8 @@ const incomingFiles = document.querySelector("#incoming-files");
 const incomingStatus = document.querySelector("#incoming-status");
 let incomingTimer = null;
 let incomingBusy = false;
+const downloadPollers = new Map();
+const downloadSamples = new Map();
 const relayRecipient = document.querySelector("#relay-recipient");
 const relayOutgoing = document.querySelector("#relay-outgoing");
 let activeRelay = null;
@@ -274,12 +277,8 @@ async function sendFile() {
             size: files.reduce((total, file) => total + file.size, 0), files: manifest,
             ...(recipient ? {recipient_id: recipient} : {})});
         if (recipient) transferStatus.textContent = "Uploading through computer...";
-        const response = await authorizedFetch(recipient ? `/api/relays/${identity}/upload` : "/api/upload", {
-            method: "POST",
-            signal: recipient ? activeRelay.controller.signal : undefined,
-            headers: recipient ? {} : {"X-Transfer-ID": identity},
-            body: formData,
-        });
+        const uploadUrl = recipient ? `/api/relays/${identity}/upload` : "/api/upload";
+        const response = await uploadWithProgress(uploadUrl, formData, identity, recipient, files);
 
         if (!response.ok) {
             const text = await response.text();
@@ -293,6 +292,8 @@ async function sendFile() {
             sendButton.textContent = "Offered";
             transferStatus.textContent = "Uploaded to computer. Waiting for recipient Accept.";
             refreshIncoming();
+        } else {
+            transferStatus.textContent = `Upload completed on computer: ${files.map(file => file.name).join(", ")}`;
         }
     } catch (error) {
         showSendFailure(error.name === "AbortError" ? "Relay cancelled" : (error.message || "Could not send file"));
@@ -301,6 +302,55 @@ async function sendFile() {
         relayRecipient.disabled = false;
         activeRelay = null;
     }
+}
+
+function uploadWithProgress(url, body, identity, relay, files) {
+    if (typeof XMLHttpRequest === "undefined") {
+        return authorizedFetch(url, {method:"POST", signal:relay ? activeRelay.controller.signal : undefined,
+            headers:relay ? {} : {"X-Transfer-ID":identity}, body});
+    }
+    return new Promise((resolve, reject) => {
+        const xhr = new XMLHttpRequest();
+        const started = Date.now();
+        sendProgress.hidden = false;
+        sendProgress.removeAttribute("value");
+        xhr.open("POST", url);
+        xhr.setRequestHeader("Authorization", `Bearer ${sessionToken}`);
+        if (!relay) xhr.setRequestHeader("X-Transfer-ID", identity);
+        if (relay && activeRelay?.controller.signal) {
+            activeRelay.controller.signal.addEventListener("abort", () => xhr.abort(), {once:true});
+        }
+        const fileSummary = files.map(file => `${file.name} (${formatFileSize(file.size)})`).join(", ");
+        xhr.upload.addEventListener("progress", event => renderUploadProgress(event, started, fileSummary));
+        xhr.addEventListener("load", () => {
+            if (xhr.status === 401) {
+                returnToPairing();
+                reject(new Error("Session expired. Connect again."));
+                return;
+            }
+            resolve({ok:xhr.status >= 200 && xhr.status < 300,
+            status:xhr.status, json:async()=>JSON.parse(xhr.responseText || "{}"),
+            text:async()=>xhr.responseText || ""});
+        });
+        xhr.addEventListener("error", () => reject(new Error("Network error during upload")));
+        xhr.addEventListener("abort", () => reject(new DOMException("Upload cancelled", "AbortError")));
+        transferStatus.textContent = `Uploading ${fileSummary} to computer…`;
+        xhr.send(body);
+    });
+}
+
+function renderUploadProgress(event, started, fileSummary = "file") {
+    if (!event.lengthComputable) {
+        sendProgress.removeAttribute("value");
+        transferStatus.textContent = "Uploading to computer… total request size unavailable";
+        return;
+    }
+    sendProgress.max = event.total;
+    sendProgress.value = event.loaded;
+    const elapsed = Math.max((Date.now() - started) / 1000, 0.001);
+    const rate = event.loaded / elapsed;
+    const eta = rate > 0 ? Math.ceil((event.total - event.loaded) / rate) : null;
+    transferStatus.textContent = `Uploading ${fileSummary}: ${formatFileSize(event.loaded)} / ${formatFileSize(event.total)} request bytes (${Math.floor(event.loaded * 100 / event.total)}%) · ${formatFileSize(rate)}/s${eta === null ? "" : ` · ~${eta}s left`}`;
 }
 
 function selectFiles(fileList) {
@@ -449,6 +499,27 @@ async function refreshIncoming() {
             const label = document.createElement("p");
             label.textContent = `${offer.filename} | ${formatFileSize(offer.size)} | ${offer.sender} | ${offer.status}`;
             row.appendChild(label);
+            if (["streaming", "sent", "failed"].includes(offer.status) && offer.stream_started_at) {
+                const progress = document.createElement("progress");
+                progress.max = offer.size || 1;
+                progress.value = offer.size
+                    ? Math.min(offer.sent_bytes || 0, progress.max)
+                    : (offer.status === "sent" ? progress.max : 0);
+                row.appendChild(progress);
+                const detail = document.createElement("p");
+                detail.className = "download-progress-detail";
+                const now = Date.now();
+                const previous = downloadSamples.get(offer.id);
+                let speedText = "";
+                if (previous && now > previous.at && offer.sent_bytes >= previous.bytes) {
+                    const rate = (offer.sent_bytes - previous.bytes) * 1000 / (now - previous.at);
+                    if (rate > 0 && offer.status === "streaming") speedText = ` · ${formatFileSize(rate)}/s · ~${Math.ceil((offer.size - offer.sent_bytes) / rate)}s left`;
+                }
+                downloadSamples.set(offer.id, {at:now, bytes:offer.sent_bytes || 0});
+                const percent = offer.size ? Math.floor((offer.sent_bytes || 0) * 100 / offer.size) : (offer.status === "sent" ? 100 : null);
+                detail.textContent = `${formatFileSize(offer.sent_bytes || 0)} / ${formatFileSize(offer.size)} (${percent === null ? "unknown" : `${percent}%`}) sent by computer${speedText}; browser save status is unavailable`;
+                row.appendChild(detail);
+            }
             if (offer.status === "pending") {
                 for (const decision of ["accept", "reject"]) {
                     const button = document.createElement("button");
@@ -521,6 +592,27 @@ function addDownloadLink(offer, row) {
     link.download = offer.filename;
     link.textContent = "Download";
     link.referrerPolicy = "no-referrer";
+    link.addEventListener("click", () => {
+        incomingStatus.textContent = `Sending ${offer.filename} to browser; saved-file progress is unavailable.`;
+        if (!downloadPollers.has(offer.id)) {
+            const timer = window.setInterval(async () => {
+                try {
+                    const response = await authorizedFetch(`/api/incoming-offers/${encodeURIComponent(offer.id)}/state`, {cache:"no-store"});
+                    if (!response.ok) return;
+                    const state = await response.json();
+                    if (["sent", "failed", "cancelled", "expired"].includes(state.status)) {
+                        window.clearInterval(timer);
+                        downloadPollers.delete(offer.id);
+                        incomingStatus.textContent = state.status === "sent"
+                            ? `${offer.filename} sent to browser; browser save is not confirmed.`
+                            : `${offer.filename}: ${state.status}`;
+                        refreshIncoming();
+                    } else refreshIncoming();
+                } catch (_error) {}
+            }, 1000);
+            downloadPollers.set(offer.id, timer);
+        }
+    });
     row.appendChild(link);
 }
 
@@ -578,5 +670,6 @@ function resetSendFeedback() {
     sendButton.textContent = "Send";
     sendButton.disabled = false;
     transferStatus.textContent = "";
+    sendProgress.hidden = true;
     transferStatus.classList.remove("error");
 }

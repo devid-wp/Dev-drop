@@ -1,4 +1,5 @@
 import hashlib
+import inspect
 import queue
 import time
 import json
@@ -48,6 +49,7 @@ from PySide6.QtWidgets import (
     QSizePolicy,
     QSpinBox,
     QListWidget,
+    QProgressBar,
     QVBoxLayout,
     QWidget,
 )
@@ -101,20 +103,30 @@ def ensure_firewall_rule(port: int) -> tuple[bool, str]:
         return False, f"Firewall check failed: {e}"
 
 
-def background(widget, work, success, failure):
+def background(widget, work, success, failure, progress=None):
     """Run blocking work off the Qt thread; deliver results on its timer."""
     results = queue.Queue()
     timer = QTimer(widget)
     def run():
         try:
-            results.put((True, work()))
+            value = work(report) if inspect.signature(work).parameters else work()
+            results.put((True, value))
         except Exception as error:
             results.put((False, str(error)))
+    def report(value):
+        results.put(("progress", value))
     def poll():
-        try:
-            ok, value = results.get_nowait()
-        except queue.Empty:
-            return
+        while True:
+            try:
+                item = results.get_nowait()
+            except queue.Empty:
+                return
+            if item[0] == "progress":
+                if progress:
+                    progress(item[1])
+                continue
+            ok, value = item
+            break
         timer.stop()
         timer.deleteLater()
         (success if ok else failure)(value)
@@ -380,6 +392,9 @@ class FileDropArea(QFrame):
         self.file_list.setObjectName("fileList")
         self.file_list.setMaximumHeight(92)
         self.file_list.hide()
+        self.progress = QProgressBar()
+        self.progress.setRange(0, 100)
+        self.progress.hide()
 
         self.choose_button = QPushButton("Choose files")
         self.send_button = QPushButton("Send files")
@@ -398,6 +413,7 @@ class FileDropArea(QFrame):
         layout.addWidget(self.title)
         layout.addWidget(self.hint)
         layout.addWidget(self.file_list)
+        layout.addWidget(self.progress)
         layout.addLayout(buttons)
 
     def dragEnterEvent(self, event: QDragEnterEvent) -> None:
@@ -451,21 +467,37 @@ class FileDropArea(QFrame):
         files = list(self.selected_files)
         port = self.window().active_port
         self.setEnabled(False)
+        self.progress.setValue(0)
+        self.progress.show()
         self.hint.setText("Waiting for owner approval...")
         def finished(saved):
             self.setEnabled(True)
+            self.progress.setValue(100)
+            self.progress.hide()
             self.set_files([])
             self.hint.setText(f"Sent {len(saved)} file(s)")
         def failed(message):
             self.setEnabled(True)
+            self.progress.hide()
             self.hint.setText(message)
-        background(self, lambda: self._upload_files(files, port), finished, failed)
+        def progress(update):
+            self.progress.setRange(0, 100 if update["total"] else 0)
+            if update["total"]:
+                self.progress.setValue(int(update["sent"] * 100 / update["total"]))
+            self.hint.setText(update["label"])
+        background(self, lambda report: self._upload_files(files, port, report), finished, failed, progress)
 
-    def _upload_files(self, files: list[Path], port=None) -> list[str]:
+    def _upload_files(self, files: list[Path], port=None, progress=None) -> list[str]:
         port = self.window().active_port if port is None else port
         client = BackendClient(port)
         token = client.transfer_token()
         identity = client.await_approval(files, token)
+        total = sum(file.stat().st_size for file in files)
+        sent = 0
+        started = time.monotonic()
+        if progress:
+            names = ", ".join(f"{file.name} ({format_bytes(file.stat().st_size)})" for file in files)
+            progress({"sent": 0, "total": total, "label": f"Transferring {names}: 0 / {format_bytes(total)}"})
         boundary = f"----DevDrop{os.urandom(12).hex()}"
         connection = TLSSettings.load().connection(port, timeout=60)
         connection.putrequest("POST", "/api/upload")
@@ -487,6 +519,13 @@ class FileDropArea(QFrame):
                 with file.open("rb") as source:
                     while chunk := source.read(1024 * 1024):
                         self._send_chunk(connection, chunk)
+                        sent += len(chunk)
+                        if progress:
+                            elapsed = max(time.monotonic() - started, 0.001)
+                            rate = sent / elapsed
+                            eta = (total - sent) / rate if rate > 0 else 0
+                            progress({"sent": sent, "total": total,
+                                "label": f"Sending {file.name}: {format_bytes(sent)} / {format_bytes(file.stat().st_size)} · total {format_bytes(total)} · {format_bytes(int(rate))}/s · ETA {int(eta)}s (server confirmation pending)"})
                 self._send_chunk(connection, b"\r\n")
             self._send_chunk(connection, f"--{boundary}--\r\n".encode())
             # Terminating zero-length chunk: required to close a chunked body,
@@ -651,6 +690,7 @@ class MainWindow(QMainWindow):
         self.outgoing_status = QLabel("")
         self.outgoing_status.setWordWrap(True)
         self._outgoing_busy = False
+        self._outgoing_progress_samples: dict[str, tuple[float, int]] = {}
         self._creating_offer = False
         self.pending_list = QListWidget()
         self.approve_button = QPushButton("Approve")
@@ -915,7 +955,26 @@ class MainWindow(QMainWindow):
             identity = item.data(Qt.ItemDataRole.UserRole) if item else None
             self.outgoing_list.clear()
             for offer in offers.get("offers", []):
-                text = f"{offer['filename']} | {format_bytes(offer['size'])} | {offer['recipient_id'][:8]} | {offer['status']}"
+                state = offer['status']
+                sent = int(offer.get("sent_bytes") or 0)
+                size = int(offer["size"])
+                text = f"{offer['filename']} | {format_bytes(size)} | {offer['recipient_id'][:8]} | {state}"
+                if offer.get("stream_started_at") is not None:
+                    percent = int(sent * 100 / size) if size else (100 if state == "sent" else 0)
+                    now = time.monotonic()
+                    previous = self._outgoing_progress_samples.get(offer["id"])
+                    if previous and now > previous[0] and sent >= previous[1]:
+                        rate = (sent - previous[1]) / (now - previous[0])
+                        if rate > 0 and state == "streaming":
+                            eta = max(0, int((size - sent) / rate))
+                            text += f" | {format_bytes(sent)} / {format_bytes(size)} ({percent}%) | {format_bytes(int(rate))}/s | ETA {eta}s"
+                        else:
+                            text += f" | {format_bytes(sent)} / {format_bytes(size)} ({percent}%)"
+                    else:
+                        text += f" | {format_bytes(sent)} / {format_bytes(size)} ({percent}%)"
+                    self._outgoing_progress_samples[offer["id"]] = (now, sent)
+                if state == "sent":
+                    text += " | browser save not confirmed"
                 self.outgoing_list.addItem(text)
                 item = self.outgoing_list.item(self.outgoing_list.count() - 1)
                 item.setData(Qt.ItemDataRole.UserRole, offer["id"])

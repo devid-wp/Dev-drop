@@ -15,11 +15,11 @@ const assert = require('node:assert/strict');
 const elements = new Map();
 function element(key) {
  if (!elements.has(key)) elements.set(key, {
-  value: '', disabled: false, textContent: '', handlers: {},
+  value: '', disabled: false, textContent: '', handlers: {}, removedAttributes: new Set(),
   classList: {values: new Set(), add(x){this.values.add(x)}, remove(x){this.values.delete(x)}, toggle(){}},
   addEventListener(name, handler){this.handlers[name] = handler},
   querySelector(name){return element(key + name)}, focus(){}, appendChild(){},
-  setAttribute(){}, removeAttribute(){}, replaceChildren(){}
+  setAttribute(){}, removeAttribute(name){this.removedAttributes.add(name)}, replaceChildren(){}
  });
  return elements.get(key);
 }
@@ -50,6 +50,9 @@ vm.runInContext(fs.readFileSync('web/app.js', 'utf8'), context);
  }
  assert.equal(await vm.runInContext('sha256(new TextEncoder().encode("abc").buffer)', context),
   'ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad');
+ vm.runInContext('renderUploadProgress({lengthComputable:false}, Date.now())', context);
+ assert.equal(element('#transfer-status').textContent, 'Uploading to computer… total request size unavailable');
+ assert(element('#send-progress').removedAttributes.has('value'));
  vm.runInContext('openTransferScreen()', context);
  assert(!element('.card').classList.values.has('hidden'));
  element('#pair-code').value = '123456789';
