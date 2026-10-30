@@ -513,6 +513,15 @@ async def incoming_file_offers(token: str = Depends(require_transfer_session)):
     return {"offers": file_offers.list(token), "session_id": recipient_id(token)}
 
 
+@app.get("/api/incoming-offers/{identity}/state")
+async def incoming_offer_state(identity: str, token: str = Depends(require_transfer_session)):
+    try:
+        offer = next(item for item in file_offers.list(token) if item["id"] == identity)
+        return offer
+    except (StopIteration, OfferError):
+        raise HTTPException(status_code=404, detail="File offer is unavailable")
+
+
 @app.post("/api/incoming-offers/{identity}/accept")
 async def accept_file_offer(identity: str, token: str = Depends(require_transfer_session)):
     offer, grant = file_offers.accept(identity, token)
@@ -529,13 +538,18 @@ async def reject_file_offer(identity: str, token: str = Depends(require_transfer
 
 
 class OfferDownloadResponse(StreamingResponse):
-    def __init__(self, *args, cleanup, **kwargs):
+    def __init__(self, *args, cleanup, on_chunk=lambda _amount: None, **kwargs):
         self.cleanup = cleanup
+        self.on_chunk = on_chunk
         super().__init__(*args, **kwargs)
 
     async def __call__(self, scope, receive, send):
+        async def tracked_send(message):
+            await send(message)
+            if message.get("type") == "http.response.body" and message.get("body"):
+                self.on_chunk(len(message["body"]))
         try:
-            await super().__call__(scope, receive, send)
+            await super().__call__(scope, receive, tracked_send)
         finally:
             # Also runs on disconnect or a failed send, before request teardown.
             self.cleanup()
@@ -567,7 +581,7 @@ async def download_file_offer(identity: str, request: Request):
     response = OfferDownloadResponse(stream(), media_type="application/octet-stream", headers={
         "Content-Length": str(offer["size"]), "Content-Disposition": "attachment; filename*=UTF-8''" + filename,
         "Cache-Control": "no-store", "X-Content-Type-Options": "nosniff", "Accept-Ranges": "none",
-    }, cleanup=cleanup)
+    }, cleanup=cleanup, on_chunk=lambda amount: file_offers.record_stream_bytes(identity, amount))
     response.delete_cookie("__Secure-dd_download_" + identity, path=f"/api/incoming-offers/{identity}/download",
                            secure=True, httponly=True, samesite="strict")
     return response

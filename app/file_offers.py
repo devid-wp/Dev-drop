@@ -32,11 +32,16 @@ class FileOffer:
     grant_hash: str | None = None
     sender: str = "Computer owner"
     expire_stream: bool = False
+    sent_bytes: int = 0
+    stream_started_at: float | None = None
+    stream_finished_at: float | None = None
 
     def public(self):
         return {"id": self.id, "recipient_id": self.recipient_id,
                 "filename": self.filename, "size": self.size, "sender": self.sender,
-                "created_at": self.created_at, "expires_at": self.expires_at, "status": self.status}
+                "created_at": self.created_at, "expires_at": self.expires_at, "status": self.status,
+                "sent_bytes": self.sent_bytes, "stream_started_at": self.stream_started_at,
+                "stream_finished_at": self.stream_finished_at}
 
 
 class FileOfferService:
@@ -151,6 +156,14 @@ class FileOfferService:
             if self._get(identity).status != "streaming":
                 raise OfferError("Download was cancelled or expired")
 
+    def record_stream_bytes(self, identity, amount):
+        """Count server-yielded bytes; this does not prove browser persistence."""
+        with self._lock:
+            offer = self._get(identity)
+            if offer.status != "streaming":
+                raise OfferError("Download was cancelled or expired")
+            offer.sent_bytes = min(offer.size, offer.sent_bytes + amount)
+
     def _get(self, identity, recipient=None):
         self._sweep()
         offer = self._offers.get(identity)
@@ -205,6 +218,9 @@ class FileOfferService:
                 offer.status, offer.grant_hash = "failed", None
                 raise OfferError("Offered file is unavailable") from error
             offer.status, offer.grant_hash = "streaming", None
+            offer.sent_bytes = 0
+            offer.stream_started_at = self.clock()
+            offer.stream_finished_at = None
             return offer.public(), source
 
     def finish(self, identity, succeeded):
@@ -213,6 +229,7 @@ class FileOfferService:
             if offer is not None:
                 if offer.status == "streaming":
                     offer.status = "sent" if succeeded else "failed"
+                    offer.stream_finished_at = self.clock()
                 self._remove(offer)
 
     def close(self):

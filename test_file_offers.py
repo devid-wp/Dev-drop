@@ -139,6 +139,44 @@ class FileOfferTests(unittest.TestCase):
             offers = list(pool.map(lambda _: self.create(), range(20)))
         self.assertEqual(len({offer['id'] for offer in offers}), 20)
 
+    def test_stream_byte_progress_and_terminal_states(self):
+        offer = self.create()
+        _, grant = self.service.accept(offer['id'], 'session-a')
+        state, stream = self.service.claim(offer['id'], grant, lambda _: True)
+        self.assertEqual(state['sent_bytes'], 0)
+        self.service.record_stream_bytes(offer['id'], 3)
+        self.assertEqual(self.service.list('session-a')[0]['sent_bytes'], 3)
+        self.service.record_stream_bytes(offer['id'], 99)
+        self.assertEqual(self.service.list('session-a')[0]['sent_bytes'], 8)
+        stream.close()
+        self.service.finish(offer['id'], True)
+        self.assertEqual(self.service.list('session-a')[0]['status'], 'sent')
+        self.assertEqual(self.service.list('session-a')[0]['sent_bytes'], 8)
+
+    def test_failed_stream_preserves_only_recipient_scoped_progress(self):
+        offer = self.create()
+        _, grant = self.service.accept(offer['id'], 'session-a')
+        _, stream = self.service.claim(offer['id'], grant, lambda _: True)
+        self.service.record_stream_bytes(offer['id'], 2)
+        stream.close()
+        self.service.finish(offer['id'], False)
+        self.assertEqual(self.service.list('session-a')[0]['status'], 'failed')
+        self.assertEqual(self.service.list('session-b'), [])
+
+    def test_parallel_stream_progress_stays_with_each_offer(self):
+        first, second = self.create(), self.create()
+        _, grant_a = self.service.accept(first['id'], 'session-a')
+        _, grant_b = self.service.accept(second['id'], 'session-a')
+        _, stream_a = self.service.claim(first['id'], grant_a, lambda _: True)
+        _, stream_b = self.service.claim(second['id'], grant_b, lambda _: True)
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            list(pool.map(lambda args: self.service.record_stream_bytes(*args),
+                          [(first['id'], 3), (second['id'], 6)]))
+        states = {item['id']: item['sent_bytes'] for item in self.service.list('session-a')}
+        self.assertEqual(states[first['id']], 3)
+        self.assertEqual(states[second['id']], 6)
+        stream_a.close(); stream_b.close()
+
 
 class FileOfferAPITests(unittest.TestCase):
     def setUp(self):
@@ -189,6 +227,13 @@ class FileOfferAPITests(unittest.TestCase):
             self.assertEqual(request(path, 'POST')[0], 401)
         self.assertEqual(request('/api/incoming-offers')[0], 401)
         self.assertEqual(request(f'/api/incoming-offers/{identity}/download', headers=other)[0], 409)
+
+    def test_progress_state_is_bound_to_recipient_session(self):
+        identity = self.create()
+        other = {'Authorization': f'Bearer {main.create_session()}'}
+        self.assertEqual(request(f'/api/incoming-offers/{identity}/state', headers=self.headers)[0], 200)
+        self.assertEqual(request(f'/api/incoming-offers/{identity}/state', headers=other)[0], 404)
+        self.assertEqual(request(f'/api/incoming-offers/{identity}/state')[0], 401)
 
     def test_cancel_reject_and_path_injection(self):
         identity = self.create()
