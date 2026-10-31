@@ -262,6 +262,39 @@ async def index():
     return FileResponse(WEB_DIR / "index.html")
 
 
+def require_owner_panel(request: Request) -> None:
+    if not _is_local_request(request):
+        raise HTTPException(status_code=403, detail="Owner panel is local-only")
+    host_header = request.headers.get("host", "")
+    try:
+        request_host = urlsplit("//" + host_header).hostname
+    except ValueError:
+        request_host = None
+    if request_host not in {"127.0.0.1", "::1", "localhost"}:
+        raise HTTPException(status_code=403, detail="Local owner host required")
+
+
+@app.get("/panel")
+async def owner_panel(request: Request):
+    """Serve the owner control panel only over a direct loopback HTTPS request."""
+    require_owner_panel(request)
+    return FileResponse(WEB_DIR / "panel.html", headers={
+        "Cache-Control": "no-store",
+        "Content-Security-Policy": "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'self'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'",
+        "Referrer-Policy": "no-referrer",
+        "X-Content-Type-Options": "nosniff",
+        "X-Frame-Options": "DENY",
+    })
+
+
+@app.get("/panel-assets/{asset_name}")
+async def owner_panel_asset(asset_name: str, request: Request):
+    require_owner_panel(request)
+    if asset_name not in {"panel.css", "panel.js"}:
+        raise HTTPException(status_code=404, detail="Panel asset not found")
+    return FileResponse(WEB_DIR / asset_name, headers={"Cache-Control": "no-store", "X-Content-Type-Options": "nosniff"})
+
+
 @app.get("/api/health")
 async def health():
     return {"status": "ok", "app": "DevDrop"}
@@ -276,8 +309,7 @@ async def discover_servers():
 
 @app.get("/api/status")
 async def status(request: Request):
-    if not _is_local_request(request):
-        raise HTTPException(status_code=403, detail="Management endpoint is local-only")
+    require_local_owner(request)
 
     if not pairing_is_valid():
         generate_pairing_code()
@@ -299,23 +331,20 @@ async def status(request: Request):
 
 @app.get("/api/history")
 async def transfer_history(request: Request):
-    if not _is_local_request(request):
-        raise HTTPException(status_code=403, detail="Management endpoint is local-only")
+    require_local_owner(request)
     return {"transfers": load_transfer_history()}
 
 
 @app.delete("/api/history")
 async def clear_transfer_history(request: Request):
-    if not _is_local_request(request):
-        raise HTTPException(status_code=403, detail="Management endpoint is local-only")
+    require_local_owner(request)
     save_transfer_history([])
     return {"success": True}
 
 
 @app.get("/api/pairing-code")
 async def get_pairing_code(request: Request):
-    if not _is_local_request(request):
-        raise HTTPException(status_code=403, detail="Management endpoint is local-only")
+    require_local_owner(request)
     if not pairing_is_valid():
         generate_pairing_code()
 
@@ -327,8 +356,7 @@ async def get_pairing_code(request: Request):
 
 @app.post("/api/regenerate-pairing-code")
 async def post_regenerate_pairing_code(request: Request):
-    if not _is_local_request(request):
-        raise HTTPException(status_code=403, detail="Management endpoint is local-only")
+    require_local_owner(request)
 
     code = regenerate_pairing_code()
     return {
@@ -399,6 +427,8 @@ async def gate_transfer_body(request: Request, call_next):
             return JSONResponse(status_code=409, content={"detail": str(error)})
     response = await call_next(request)
     if request.url.path.startswith(("/api/incoming-offers", "/api/outgoing-offers", "/api/recipient-sessions", "/api/relays", "/api/relay-recipients")):
+        response.headers["Cache-Control"] = "no-store"
+    if request.url.path in {"/api/status", "/api/history", "/api/pairing-code", "/api/regenerate-pairing-code"} or request.url.path.startswith("/api/transfer-requests"):
         response.headers["Cache-Control"] = "no-store"
     return response
 

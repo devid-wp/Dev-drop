@@ -57,6 +57,14 @@ class AuthTests(unittest.TestCase):
                 self.assertEqual(status, 403)
                 self.assertNotIn(main.pairing_code.encode(), body)
 
+    def test_local_management_rejects_dns_rebinding_hosts_and_cross_site_mutations(self):
+        protected=[("/api/status","GET"),("/api/history","GET"),("/api/history","DELETE"),
+                   ("/api/pairing-code","GET"),("/api/regenerate-pairing-code","POST")]
+        for path,method in protected:
+            with self.subTest(path=path,method=method):
+                self.assertEqual(request(path,method,{},headers={"Host":"attacker.example"},host="127.0.0.1")[0],403)
+                self.assertEqual(request(path,method,{},headers={"Host":"localhost:8765","Origin":"https://evil.example"},host="127.0.0.1")[0],403)
+
     def test_local_management_remains_available(self):
         for host in ["127.0.0.1", "::1"]:
             for path in ["/api/pairing-code", "/api/status", "/api/history"]:

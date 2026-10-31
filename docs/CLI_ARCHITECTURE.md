@@ -65,6 +65,17 @@ limitation instead of fabricating a progress bar. Network and config work runs
 in managed background threads with cancellation events, bounded requests, and
 joins during shutdown.
 
+The local Web Panel at `/panel` is static HTML/CSS/JavaScript served by the
+existing FastAPI process. Its page route requires a direct loopback peer and a
+loopback Host, and adds a restrictive CSP, `no-store`, and frame protections.
+It reads existing local owner APIs and uses the existing explicit transfer
+decision routes; there is no second server or browser-side transfer service.
+The panel discards the pairing-code field returned by `/api/status` and only
+displays the code returned by `/api/pairing-code` after the owner opens
+Security. The backend now marks local status, history, pairing and decision
+responses as `no-store`. Configuration editing and certificate fingerprint/
+expiry display remain unavailable through the browser API.
+
 No second abstraction layer is needed for current local commands: the CLI uses
 the existing transport, config, discovery, runtime, store and domain services.
 Before remote CLI sending is added, introduce a small remote client/session

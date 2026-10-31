@@ -1,0 +1,79 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="dark">
+  <title>Dev-Drop · Local Panel</title>
+  <link rel="stylesheet" href="/panel-assets/panel.css">
+</head>
+<body>
+  <div class="app-shell">
+    <aside class="sidebar" aria-label="Main navigation">
+      <a class="brand" href="#dashboard" aria-label="Dev-Drop dashboard"><span class="brand-mark">D</span><span>Dev-Drop<small>LOCAL CONTROL</small></span></a>
+      <nav id="navigation">
+        <a class="nav-link active" href="#dashboard" data-page="dashboard"><span>⌂</span>Overview</a>
+        <a class="nav-link" href="#devices" data-page="devices"><span>◉</span>Devices</a>
+        <a class="nav-link" href="#transfers" data-page="transfers"><span>⇄</span>Transfers <i id="pending-count" hidden></i></a>
+        <a class="nav-link" href="#history" data-page="history"><span>◷</span>History</a>
+        <div class="nav-divider"></div>
+        <a class="nav-link" href="#security" data-page="security"><span>◇</span>Security</a>
+        <a class="nav-link" href="#settings" data-page="settings"><span>⚙</span>Settings</a>
+      </nav>
+      <div class="sidebar-bottom"><span class="local-badge"><b></b> Loopback only</span><small>Dev-Drop 2.0</small></div>
+    </aside>
+
+    <main class="main-content">
+      <header class="topbar">
+        <div><p class="eyebrow">OWNER CONSOLE</p><h1 id="page-title">Overview</h1></div>
+        <div class="top-actions"><span class="server-pill" id="server-pill"><i></i><span>Checking server…</span></span><button id="refresh" class="icon-button" type="button" title="Refresh data" aria-label="Refresh data">↻</button></div>
+      </header>
+
+      <section class="page active" id="page-dashboard" aria-labelledby="page-title">
+        <div class="welcome-row"><div><h2>Your local transfer hub</h2><p>Private device sharing, managed from this computer.</p></div><span class="updated" id="last-updated">Waiting for server data</span></div>
+        <div class="stat-grid">
+          <article class="stat-card"><div class="stat-heading"><span>Server</span><span class="stat-icon">⌁</span></div><strong id="server-state">—</strong><small id="server-address">Checking local HTTPS</small></article>
+          <article class="stat-card"><div class="stat-heading"><span>Connected devices</span><span class="stat-icon">◉</span></div><strong id="device-total">—</strong><small>Active paired sessions</small></article>
+          <article class="stat-card"><div class="stat-heading"><span>Active transfers</span><span class="stat-icon">⇄</span></div><strong id="active-total">—</strong><small id="active-caption">Live backend states</small></article>
+        </div>
+        <div class="content-grid">
+          <article class="panel-card"><div class="section-heading"><div><h2>Recent activity</h2><p>Latest saved files recorded by the server</p></div><a href="#history" class="text-link">View history →</a></div><div id="recent-activity" class="activity-list"><div class="loading">Loading activity…</div></div></article>
+          <article class="panel-card"><div class="section-heading"><div><h2>Devices</h2><p>Currently paired sessions</p></div><a href="#devices" class="text-link">View devices →</a></div><div id="dashboard-devices" class="compact-list"><div class="loading">Loading devices…</div></div></article>
+        </div>
+      </section>
+
+      <section class="page" id="page-devices">
+        <div class="page-intro"><div><h2>Devices</h2><p>Nearby Dev-Drop servers and currently paired clients.</p></div><button class="secondary-button refresh-page" type="button">↻ Refresh</button></div>
+        <div class="content-grid"><article class="panel-card"><div class="section-heading"><div><h3>Discovered servers</h3><p>From the existing local network discovery service</p></div></div><div id="discovered-devices" class="device-list"><div class="loading">Searching local network…</div></div></article><article class="panel-card"><div class="section-heading"><div><h3>Paired sessions</h3><p>Active sessions known to this server</p></div></div><div id="paired-devices" class="device-list"><div class="loading">Loading devices…</div></div></article></div>
+      </section>
+
+      <section class="page" id="page-transfers">
+        <div class="page-intro"><div><h2>Transfers</h2><p>Review each incoming request before Dev-Drop accepts it.</p></div><button class="secondary-button refresh-page" type="button">↻ Refresh</button></div>
+        <article class="panel-card"><div class="section-heading"><div><h3>Waiting for your decision</h3><p>Approval is required for every transfer.</p></div><span class="count-chip" id="request-count">0 pending</span></div><div id="pending-transfers" class="transfer-list"><div class="loading">Loading requests…</div></div></article>
+        <article class="panel-card spaced"><div class="section-heading"><div><h3>Outgoing to devices</h3><p>Real transfer state and byte counts from the backend</p></div></div><div id="outgoing-transfers" class="table-wrap"><div class="loading">Loading outgoing transfers…</div></div><p class="limitation-note">Incoming phone upload progress is not currently exposed by the backend.</p></article>
+      </section>
+
+      <section class="page" id="page-history">
+        <div class="page-intro"><div><h2>History</h2><p>Files successfully saved by this Dev-Drop server.</p></div><button class="secondary-button refresh-page" type="button">↻ Refresh</button></div>
+        <article class="panel-card"><div id="history-list" class="table-wrap"><div class="loading">Loading transfer history…</div></div></article>
+      </section>
+
+      <section class="page" id="page-security">
+        <div class="page-intro"><div><h2>Security</h2><p>Local pairing and transport information.</p></div><button id="regenerate-code" class="secondary-button" type="button">Generate new code</button></div>
+        <div class="content-grid security-grid"><article class="panel-card"><div class="section-heading"><div><h3>Pairing code</h3><p>Share only with a device you intend to pair.</p></div></div><div class="pair-code" id="pair-code">••• ••• •••</div><p class="muted-copy" id="pair-expiry">Available to this local owner only.</p></article><article class="panel-card"><div class="section-heading"><div><h3>HTTPS transport</h3><p>TLS is required for pairing and transfers.</p></div></div><div class="security-row"><span>Connection</span><strong id="https-state">Checking…</strong></div><div class="security-row"><span>Panel access</span><strong>Loopback only</strong></div><p class="limitation-note">Certificate fingerprint and expiry are not exposed through the existing browser API. No private key or TLS secret is shown here.</p></article></div>
+      </section>
+
+      <section class="page" id="page-settings">
+        <div class="page-intro"><div><h2>Settings</h2><p>Configuration currently exposed by the existing server API.</p></div></div>
+        <article class="panel-card settings-card"><div class="setting-row"><div><strong>Server port</strong><p>Port used by this local panel and HTTPS server</p></div><code id="setting-port">—</code></div><div class="setting-row"><div><strong>Save location</strong><p>Configured transfer session directory</p></div><code id="setting-path">—</code></div><p class="limitation-note">Configuration changes are managed with <code>devdrop config</code>. The backend does not provide a Web API for editing settings.</p></article>
+      </section>
+
+      <footer class="footer"><span>Dev-Drop runs on your device</span><span>Data stays on this computer</span></footer>
+    </main>
+  </div>
+
+  <dialog id="decision-dialog" class="decision-dialog"><form method="dialog"><span class="dialog-kicker">TRANSFER REQUEST</span><h2 id="dialog-title">Review request</h2><div id="dialog-details" class="dialog-details"></div><p class="dialog-warning">The sender identity is provided by the client and may be unverified.</p><div class="dialog-actions"><button value="cancel" class="secondary-button">Cancel</button><button id="dialog-reject" value="reject" class="danger-button">Reject</button><button id="dialog-approve" value="approve" class="primary-button">Approve</button></div></form></dialog>
+  <div id="toast" class="toast" role="status" aria-live="polite"></div>
+  <script src="/panel-assets/panel.js" defer></script>
+</body>
+</html>

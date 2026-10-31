@@ -59,6 +59,25 @@ On another device:
 
 Received data is stored inside the current DevDrop session directory.
 
+### Local Web Panel
+
+While the server is running, open its HTTPS loopback address on the same
+computer. The browser must trust the provisioned Dev-Drop CA; never bypass a
+certificate warning:
+
+```text
+https://127.0.0.1:8765/panel
+```
+
+The panel is served by the existing FastAPI process and is restricted to direct
+loopback requests with a loopback Host. It shows paired sessions, discovered
+servers, incoming approvals, outgoing offer states, history, pairing details
+and the exposed server configuration. Each incoming request requires an
+explicit review and decision. Certificate fingerprints and expiry are not
+available from the existing browser API, and settings are changed with
+`devdrop config` rather than from the panel. The existing `/` page remains the
+browser client used by phones.
+
 ## Installation
 
 ### Requirements
