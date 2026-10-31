@@ -24,10 +24,12 @@ No accounts. No cloud. Just your devices.
 ## How it works
 
 First complete the [required HTTPS and phone trust setup](docs/TRANSPORT.md).
-Then start DevDrop on your computer (the encrypted TLS key password is requested):
+Install the command entry point, then start the server (the encrypted TLS key
+password is requested):
 
 ```bash
-python devdrop.py
+pip install -e .
+devdrop serve
 ```
 
 DevDrop will display something like:
@@ -79,12 +81,13 @@ Create a virtual environment:Ы
 python -m venv .venv
 .\.venv\Scripts\Activate.ps1
 pip install -r requirements.txt
+pip install -e .
 ```
 
 Run DevDrop:
 
 ```powershell
-python devdrop.py
+devdrop serve
 ```
 
 ### Linux
@@ -93,8 +96,45 @@ python devdrop.py
 python -m venv .venv
 source .venv/bin/activate
 pip install -r requirements.txt
-python devdrop.py
+pip install -e .
+devdrop serve
 ```
+
+The previous `python devdrop.py` server launcher remains available.
+
+## CLI
+
+The CLI is the primary control surface for the local server. It uses the
+existing pinned loopback HTTPS management API for status, pairing-code display,
+pending approvals and history. It never prints session tokens. The owner must
+explicitly approve or reject every pending transfer.
+
+```bash
+devdrop --help
+devdrop status
+devdrop pair
+devdrop transfers
+devdrop transfers --approve REQUEST_ID
+devdrop transfers --reject REQUEST_ID
+devdrop history --json
+devdrop devices
+devdrop config
+devdrop doctor
+```
+
+Set the server port and session root with `devdrop config --port 8765
+--session-root ~/DevDrop`. `devdrop serve` uses that configuration and retains
+session files on shutdown. `devdrop doctor --json` reports TLS, storage, port,
+and local-server checks. Commands that expose data support `--json` where it is
+useful for scripts. `python devdrop.py` remains as a backward-compatible
+server launcher. Desktop GUI startup remains available through `devdrop.bat`
+on Windows or `python devdrop_gui.py`.
+
+The CLI does not yet provide remote `send` or remote-client `pair`: the project
+has no CLI credential store for independently trusted remote CA certificates
+and Bearer sessions. Use the existing GUI, browser or Android client for sends;
+these interfaces continue to require one-use owner approval. CLI command
+coverage and architecture are described in [CLI architecture](docs/CLI_ARCHITECTURE.md).
 
 ## Session folders
 
@@ -252,7 +292,8 @@ Expiry frees active slots. All request memory is lost on restart. Loopback is th
 existing owner trust boundary: another local process can make owner decisions.
 This does not isolate OS users or provide persistent device trust, upload quotas,
 or atomic transactions spanning saved files and SQLite history. The CLI
-alone has no approval prompt; use the GUI or the local management API.
+can list, approve and reject pending requests with `devdrop transfers`; the GUI
+and local management API continue to use the same owner boundary.
 
 ## Required HTTPS setup
 
