@@ -13,6 +13,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.Modifier
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.navigation.compose.NavHost
@@ -26,6 +27,10 @@ import com.devdrop.android.ui.screens.settings.SettingsScreen
 import com.devdrop.android.ui.screens.transfers.TransfersScreen
 import com.devdrop.android.ui.screens.device.DeviceDetailsScreen
 import com.devdrop.android.ui.screens.incoming.IncomingTransferScreen
+import com.devdrop.android.ui.screens.connection.ConnectionSetupScreen
+import com.google.mlkit.vision.codescanner.GmsBarcodeScannerOptions
+import com.google.mlkit.vision.codescanner.GmsBarcodeScanning
+import com.google.mlkit.vision.barcode.common.Barcode
 
 @Composable
 fun DevDropApp(viewModel: DevDropViewModel) {
@@ -34,11 +39,18 @@ fun DevDropApp(viewModel: DevDropViewModel) {
     val backStackEntry by navController.currentBackStackEntryAsState()
     val currentRoute = backStackEntry?.destination?.route
     val snackbarHostState = remember { SnackbarHostState() }
+    val context = LocalContext.current
+    val codeScanner = remember(context) {
+        GmsBarcodeScanning.getClient(context, GmsBarcodeScannerOptions.Builder().setBarcodeFormats(Barcode.FORMAT_QR_CODE).build())
+    }
     val photoPicker = rememberLauncherForActivityResult(ActivityResultContracts.PickMultipleVisualMedia()) {
         viewModel.addPickedFiles(it)
     }
     val documentPicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenMultipleDocuments()) {
         viewModel.addPickedFiles(it)
+    }
+    val certificatePicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) {
+        it?.let(viewModel::selectCaCertificate)
     }
 
     LaunchedEffect(state.notice) {
@@ -71,8 +83,34 @@ fun DevDropApp(viewModel: DevDropViewModel) {
         ) {
             composable(AppDestination.Nearby.route) {
                 NearbyScreen(
-                    onSearch = { viewModel.showNotice("Discovery is not connected in this build yet.") },
-                    onOpenSettings = { navController.navigate(AppDestination.Settings.route) },
+                    connection = state.connection,
+                    onSearch = viewModel::searchServers,
+                    onScanQr = {
+                        codeScanner.startScan()
+                            .addOnSuccessListener { barcode ->
+                                barcode.rawValue?.let { payload ->
+                                    if (viewModel.useQrPayload(payload)) navController.navigate("connect")
+                                } ?: viewModel.showNotice("The QR code did not contain an address.")
+                            }
+                            .addOnFailureListener { viewModel.showNotice("QR scanner unavailable. Enter the HTTPS address manually.") }
+                    },
+                    onAddressChanged = viewModel::setAddressDraft,
+                    onConnectAddress = { if (viewModel.continueToConnectionSetup()) navController.navigate("connect") },
+                    onSelectServer = { viewModel.selectDiscoveredServer(it); navController.navigate("connect") },
+                    onOpenDetails = { navController.navigate("device-details") },
+                )
+            }
+            composable("connect") {
+                ConnectionSetupScreen(
+                    state = state.connection,
+                    onAddressChanged = viewModel::setAddressDraft,
+                    onPickCertificate = { certificatePicker.launch(arrayOf("*/*")) },
+                    onFingerprintChanged = viewModel::setFingerprintConfirmation,
+                    onPairingCodeChanged = viewModel::setPairingCode,
+                    onPair = viewModel::pair,
+                    onCheck = viewModel::checkConnection,
+                    onDisconnect = viewModel::disconnect,
+                    onBack = { navController.popBackStack() },
                 )
             }
             composable(AppDestination.Send.route) {
@@ -84,8 +122,16 @@ fun DevDropApp(viewModel: DevDropViewModel) {
                 )
             }
             composable(AppDestination.Transfers.route) { TransfersScreen() }
-            composable(AppDestination.Settings.route) { SettingsScreen() }
-            composable("device-details") { DeviceDetailsScreen() }
+            composable(AppDestination.Settings.route) {
+                SettingsScreen(state.connection) {
+                    if (state.connection.phase == com.devdrop.android.data.model.ConnectionPhase.Connected) {
+                        navController.navigate("device-details")
+                    } else navController.navigate("connect")
+                }
+            }
+            composable("device-details") {
+                DeviceDetailsScreen(state.connection, viewModel::checkConnection, viewModel::disconnect)
+            }
             composable("incoming-transfer") { IncomingTransferScreen() }
         }
     }

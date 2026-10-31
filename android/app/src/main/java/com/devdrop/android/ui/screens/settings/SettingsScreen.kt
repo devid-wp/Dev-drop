@@ -18,13 +18,15 @@ import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import com.devdrop.android.BuildConfig
+import com.devdrop.android.data.model.ConnectionPhase
+import com.devdrop.android.data.model.ConnectionUiState
 import com.devdrop.android.ui.components.ConnectionStatus
 import com.devdrop.android.ui.components.DropIcon
 import com.devdrop.android.ui.components.DropIconKind
 import com.devdrop.android.ui.components.ScreenHeader
 
 @Composable
-fun SettingsScreen() {
+fun SettingsScreen(connection: ConnectionUiState, onOpenConnection: () -> Unit) {
     Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(horizontal = 20.dp, vertical = 18.dp),
         verticalArrangement = Arrangement.spacedBy(20.dp)) {
         ScreenHeader("Settings", "Connection and app information")
@@ -35,7 +37,7 @@ fun SettingsScreen() {
                     DropIcon(DropIconKind.Storage, tint = MaterialTheme.colorScheme.primary)
                     Column(Modifier.weight(1f).padding(start = 14.dp)) {
                         Text("Dev-Drop server", style = MaterialTheme.typography.titleMedium)
-                        Text("No server address configured", style = MaterialTheme.typography.bodyMedium,
+                        Text(connection.connectedAddress ?: "No server address configured", style = MaterialTheme.typography.bodyMedium,
                             color = MaterialTheme.colorScheme.onSurfaceVariant)
                     }
                 }
@@ -43,12 +45,23 @@ fun SettingsScreen() {
                     DropIcon(DropIconKind.Security, tint = MaterialTheme.colorScheme.primary)
                     Column(Modifier.weight(1f).padding(start = 14.dp)) {
                         Text("TLS trust", style = MaterialTheme.typography.titleMedium)
-                        Text("Not established", style = MaterialTheme.typography.bodyMedium,
+                        Text(if (connection.trustedFingerprint != null) "Owner-verified CA" else "Not established", style = MaterialTheme.typography.bodyMedium,
                             color = MaterialTheme.colorScheme.onSurfaceVariant)
                     }
                 }
-                ConnectionStatus("Backend integration unavailable")
+                ConnectionStatus(
+                    when (connection.phase) {
+                        ConnectionPhase.Connected -> "Connected"
+                        ConnectionPhase.Connecting -> "Connecting"
+                        ConnectionPhase.Unavailable -> "Server unavailable"
+                        else -> "Not connected"
+                    },
+                    connected = connection.phase == ConnectionPhase.Connected,
+                )
             }
+        }
+        androidx.compose.material3.OutlinedButton(onClick = onOpenConnection, modifier = Modifier.fillMaxWidth()) {
+            Text(if (connection.phase == ConnectionPhase.Connected) "Manage connection" else "Connect to a server")
         }
         Text("ABOUT", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
         Surface(color = MaterialTheme.colorScheme.surface, shape = RoundedCornerShape(22.dp)) {
