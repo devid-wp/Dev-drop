@@ -116,12 +116,16 @@ fun DevDropApp(viewModel: DevDropViewModel) {
             composable(AppDestination.Send.route) {
                 SendScreen(
                     files = state.selectedFiles,
+                    transfer = state.transfer,
+                    connected = state.connection.phase == com.devdrop.android.data.model.ConnectionPhase.Connected,
                     onPickPhotos = { photoPicker.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageAndVideo)) },
                     onPickDocuments = { documentPicker.launch(arrayOf("*/*")) },
                     onRemove = viewModel::removeFile,
+                    onSend = viewModel::sendSelectedFiles,
+                    onCancel = viewModel::cancelTransfer,
                 )
             }
-            composable(AppDestination.Transfers.route) { TransfersScreen() }
+            composable(AppDestination.Transfers.route) { TransfersScreen(state.transfer, viewModel::cancelTransfer) }
             composable(AppDestination.Settings.route) {
                 SettingsScreen(state.connection) {
                     if (state.connection.phase == com.devdrop.android.data.model.ConnectionPhase.Connected) {

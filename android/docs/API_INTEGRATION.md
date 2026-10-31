@@ -75,17 +75,23 @@ No real Android connection is claimed based on Linux tests alone.
 
 ## Phone to PC upload and approval
 
-Create a transfer with `POST /api/transfer-requests` using the Bearer token. A
-file request includes `type: "file"`, a sender label, description, total size,
-and an ordered `files` array of `{name,size,sha256}`. The local computer owner
-must approve the request. Poll `GET /api/transfer-requests/{id}` as the same
-session until approved or terminal; approval is one-use and expires. Then send
-multipart `files` to `POST /api/upload` with `Authorization: Bearer …` and
-`X-Transfer-ID: {id}`. The backend checks manifest names, lengths and SHA-256
-before saving. A future Android sender should stream a `ContentResolver` input
-stream, calculate/report progress from bytes actually written to the request,
-and treat the server's successful response as completion, not an upload
-progress event alone.
+Create one transfer with `POST /api/transfer-requests` using the Bearer token.
+The request includes `type: "file"`, a sender label, description, total size,
+and an ordered `files` array of `{name,size,sha256}`. The phone computes each
+SHA-256 by streaming a ContentResolver URI, then reopens each URI for upload.
+The local computer owner must approve this manifest. Poll
+`GET /api/transfer-requests/{id}` as the same session until approved or
+terminal; the approval is one-use and expires after two minutes. After approval
+the app sends multipart `files` to `POST /api/upload` with
+`Authorization: Bearer …` and `X-Transfer-ID: {id}`. The backend checks all
+manifest names, lengths and SHA-256 values before saving and returns success
+only after saving. Although the API accepts multiple manifest entries, its
+filesystem writes are per file and it does not roll back earlier files if a
+later save fails. Android therefore sends selections sequentially, with a
+separate owner approval and one-use request for each file. Progress counts file
+payload bytes actually written; completion is shown only after the server's
+successful response. Cancellation closes active streams and the HTTPS
+connection and attempts to cancel the current pending approval.
 
 ## PC to phone offers and downloads
 

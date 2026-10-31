@@ -29,12 +29,14 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import com.devdrop.android.data.PickedFile
 import com.devdrop.android.data.formatFileSize
+import com.devdrop.android.data.TransferUiState
+import com.devdrop.android.data.TransferPhase
 import com.devdrop.android.ui.components.DropIcon
 import com.devdrop.android.ui.components.DropIconKind
 import com.devdrop.android.ui.components.ScreenHeader
 
 @Composable
-fun SendScreen(files: List<PickedFile>, onPickPhotos: () -> Unit, onPickDocuments: () -> Unit, onRemove: (PickedFile) -> Unit) {
+fun SendScreen(files: List<PickedFile>, transfer: TransferUiState, connected: Boolean, onPickPhotos: () -> Unit, onPickDocuments: () -> Unit, onRemove: (PickedFile) -> Unit, onSend: () -> Unit, onCancel: () -> Unit) {
     Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(horizontal = 20.dp, vertical = 18.dp),
         verticalArrangement = Arrangement.spacedBy(20.dp)) {
         ScreenHeader("Send files", "Choose what you want to share")
@@ -112,12 +114,24 @@ fun SendScreen(files: List<PickedFile>, onPickPhotos: () -> Unit, onPickDocument
                     color = MaterialTheme.colorScheme.onSurfaceVariant)
             }
         }
-        Button(onClick = {}, enabled = false, modifier = Modifier.fillMaxWidth().height(54.dp), shape = CircleShape,
+        if (transfer.phase != TransferPhase.Idle) {
+            Surface(color = MaterialTheme.colorScheme.surface, shape = RoundedCornerShape(18.dp)) {
+                Column(Modifier.fillMaxWidth().padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text(transfer.message.orEmpty(), style = MaterialTheme.typography.titleSmall)
+                    if (transfer.phase == TransferPhase.Sending) {
+                        Text("${transfer.percent}% · ${formatFileSize(transfer.bytesSent)} / ${formatFileSize(transfer.totalBytes)} · ${transfer.bytesPerSecond?.let { formatFileSize(it) + "/s" } ?: "Calculating speed…"}${transfer.etaSeconds?.let { " · ${it}s left" } ?: ""}", style = MaterialTheme.typography.bodySmall)
+                    }
+                    if (transfer.phase == TransferPhase.Sending || transfer.phase == TransferPhase.WaitingApproval || transfer.phase == TransferPhase.Preparing)
+                        OutlinedButton(onClick = onCancel) { Text("Cancel") }
+                }
+            }
+        }
+        Button(onClick = onSend, enabled = files.isNotEmpty() && connected && transfer.phase !in setOf(TransferPhase.Preparing, TransferPhase.WaitingApproval, TransferPhase.Sending), modifier = Modifier.fillMaxWidth().height(54.dp), shape = CircleShape,
             colors = ButtonDefaults.buttonColors(disabledContainerColor = MaterialTheme.colorScheme.surfaceVariant,
                 disabledContentColor = MaterialTheme.colorScheme.onSurfaceVariant)) {
-            Text("Send unavailable")
+            Text(if (connected) "Send files" else "Connect to send")
         }
-        Text("Server connection and file transfer are not configured yet.", Modifier.fillMaxWidth(),
+        Text(transfer.message ?: if (connected) "The computer owner must approve each transfer." else "Server connection is required before sending.", Modifier.fillMaxWidth(),
             style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant,
             textAlign = androidx.compose.ui.text.style.TextAlign.Center)
     }

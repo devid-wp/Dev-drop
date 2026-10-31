@@ -15,6 +15,9 @@ import com.devdrop.android.data.model.ConnectionUiState
 import com.devdrop.android.data.model.DiscoveredServer
 import com.devdrop.android.data.model.reduceConnectionPhase
 import com.devdrop.android.data.network.ServerAddress
+import com.devdrop.android.data.network.DevDropHttpClient
+import com.devdrop.android.data.network.UploadSource
+import com.devdrop.android.data.network.TransferFailure
 import com.devdrop.android.data.repository.DefaultDevDropConnectionRepository
 import com.devdrop.android.data.repository.DevDropConnectionRepository
 import com.devdrop.android.data.security.ServerTrust
@@ -23,18 +26,39 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.isActive
+import kotlinx.coroutines.ensureActive
+import kotlin.math.roundToInt
 import kotlinx.coroutines.withContext
 
 data class DevDropUiState(
     val selectedFiles: List<PickedFile> = emptyList(),
     val notice: String? = null,
     val connection: ConnectionUiState = ConnectionUiState(),
+    val transfer: TransferUiState = TransferUiState(),
 )
+
+enum class TransferPhase { Idle, Preparing, WaitingApproval, Sending, Completed, Error, Cancelled }
+data class TransferUiState(val phase: TransferPhase = TransferPhase.Idle, val message: String? = null,
+    val bytesSent: Long = 0, val totalBytes: Long = 0, val percent: Int = 0, val bytesPerSecond: Long? = null,
+    val etaSeconds: Long? = null)
+
+internal fun transferFailureMessage(error: Throwable): String = when (error) {
+    is TransferFailure -> error.message.orEmpty()
+    is ConnectionException.SessionExpired -> "Session expired. Connect to the computer again."
+    is ConnectionException.NetworkUnavailable -> "Network connection failed. Check the Wi-Fi and server."
+    is ConnectionException.HttpFailure -> if (error.status == 507 || error.status == 500) "The computer could not save the files. Check available disk space and permissions." else error.message.orEmpty()
+    else -> error.message?.takeIf { it.contains("Could not") || it.contains("open") } ?: "Could not send files. Check connection and available disk space."
+}
 
 class DevDropViewModel(
     application: Application,
     private val repository: DevDropConnectionRepository = DefaultDevDropConnectionRepository(application),
 ) : AndroidViewModel(application) {
+    private val transferHttp = DevDropHttpClient()
+    private var transferJob: Job? = null
     private val _uiState = MutableStateFlow(DevDropUiState())
     val uiState: StateFlow<DevDropUiState> = _uiState.asStateFlow()
 
@@ -190,6 +214,85 @@ class DevDropViewModel(
     }
 
     fun removeFile(file: PickedFile) { _uiState.value = _uiState.value.copy(selectedFiles = _uiState.value.selectedFiles - file) }
+    fun sendSelectedFiles() {
+        if (transferJob?.isActive == true) return
+        val selected = _uiState.value.selectedFiles
+        val saved = repository.savedConnection()
+        if (selected.isEmpty() || saved == null) { showNotice(if (saved == null) "Connect to a Dev-Drop server before sending." else "Choose at least one file."); return }
+        transferJob = viewModelScope.launch {
+            setTransfer(TransferUiState(TransferPhase.Preparing, "Preparing files…"))
+            var requestId: String? = null
+            try {
+                val resolver = getApplication<Application>().contentResolver
+                val sources = withContext(Dispatchers.IO) {
+                    selected.map { picked ->
+                        val uri = Uri.parse(picked.uri)
+                        val measured = resolver.openInputStream(uri)?.use { input ->
+                            com.devdrop.android.data.network.digestStream(input) { ensureActive() }
+                        } ?: throw java.io.IOException("Could not open ${picked.name}")
+                        // Verify the provider can reopen before asking the owner to approve.
+                        resolver.openInputStream(uri)?.use { }
+                            ?: throw java.io.IOException("This provider cannot reopen ${picked.name}")
+                        val uploadName = picked.name.filterNot(Char::isISOControl).take(255).ifBlank { "upload.bin" }
+                        UploadSource(uploadName, measured.size, picked.mimeType, measured.sha256) {
+                            resolver.openInputStream(uri) ?: throw java.io.IOException("Could not reopen ${picked.name}")
+                        }
+                    }
+                }
+                val total = sources.sumOf { it.size }
+                var completedBytes = 0L
+                var activeUploadNanos = 0L
+                sources.forEachIndexed { index, source ->
+                    ensureActive()
+                    requestId = withContext(Dispatchers.IO) {
+                        transferHttp.createFileRequest(saved.address, saved.caCertificateDer, saved.token, listOf(source))
+                    }
+                    setTransfer(TransferUiState(TransferPhase.WaitingApproval, "Waiting for approval for ${source.name}…", completedBytes, total,
+                        if (total > 0) (completedBytes * 100 / total).toInt() else 0))
+                    while (true) {
+                        ensureActive()
+                        val status = withContext(Dispatchers.IO) { transferHttp.transferState(saved.address, saved.caCertificateDer, saved.token, requestId!!) }
+                        when (status) {
+                            "approved" -> break
+                            "rejected" -> throw TransferFailure("rejected", "The computer owner declined ${source.name}.")
+                            "expired" -> throw TransferFailure("expired", "Approval expired for ${source.name}. Start a new transfer request.")
+                            "cancelled" -> throw TransferFailure("rejected", "The transfer request for ${source.name} was cancelled.")
+                        }
+                        delay(1000)
+                    }
+                    val started = System.nanoTime()
+                    setTransfer(TransferUiState(TransferPhase.Sending, "Sending ${source.name}…", completedBytes, total,
+                        if (total > 0) (completedBytes * 100 / total).toInt() else 0))
+                    withContext(Dispatchers.IO) {
+                        transferHttp.uploadFiles(saved.address, saved.caCertificateDer, saved.token, requestId!!, listOf(source)) { bytes ->
+                            val elapsed = activeUploadNanos + (System.nanoTime() - started).coerceAtLeast(1)
+                            val elapsedSeconds = elapsed / 1_000_000_000.0
+                            val transferred = completedBytes + bytes
+                            val rate = (transferred / elapsedSeconds).toLong().takeIf { elapsedSeconds >= 1.0 && it > 0 }
+                            val remaining = (total - transferred).coerceAtLeast(0)
+                            _uiState.value = _uiState.value.copy(transfer = TransferUiState(TransferPhase.Sending, "Sending ${source.name}…", transferred, total,
+                                if (total > 0) ((transferred * 100.0 / total).roundToInt()).coerceIn(0, 99) else 0,
+                                rate, if (rate != null) remaining / rate else null))
+                        }
+                    }
+                    activeUploadNanos += System.nanoTime() - started
+                    completedBytes += source.size
+                    _uiState.value = _uiState.value.copy(selectedFiles = _uiState.value.selectedFiles - selected[index])
+                }
+                setTransfer(TransferUiState(TransferPhase.Completed, "All files saved on the computer.", total, total, 100))
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                transferHttp.cancelActiveRequest()
+                requestId?.let { id -> runCatching { withContext(Dispatchers.IO) { transferHttp.cancelTransfer(saved.address, saved.caCertificateDer, saved.token, id) } } }
+                setTransfer(TransferUiState(TransferPhase.Cancelled, "Transfer cancelled."))
+                throw e
+            } catch (e: Throwable) {
+                setTransfer(TransferUiState(TransferPhase.Error, transferFailureMessage(e)))
+            }
+        }
+    }
+    fun cancelTransfer() { transferHttp.cancelActiveRequest(); transferJob?.cancel() }
+    fun dismissTransfer() { if (transferJob?.isActive != true) setTransfer(TransferUiState()) }
+    private fun setTransfer(value: TransferUiState) { _uiState.value = _uiState.value.copy(transfer = value) }
     fun clearNotice() { _uiState.value = _uiState.value.copy(notice = null) }
     fun showNotice(message: String) { _uiState.value = _uiState.value.copy(notice = message) }
 

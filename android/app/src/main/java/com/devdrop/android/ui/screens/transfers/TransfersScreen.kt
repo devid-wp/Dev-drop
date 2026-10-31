@@ -21,16 +21,28 @@ import com.devdrop.android.ui.components.DropIcon
 import com.devdrop.android.ui.components.DropIconKind
 import com.devdrop.android.ui.components.EmptyState
 import com.devdrop.android.ui.components.ScreenHeader
+import com.devdrop.android.data.TransferUiState
+import com.devdrop.android.data.TransferPhase
+import com.devdrop.android.data.formatFileSize
 
 @Composable
-fun TransfersScreen() {
+fun TransfersScreen(transfer: TransferUiState, onCancel: () -> Unit) {
     Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(horizontal = 20.dp, vertical = 18.dp),
         verticalArrangement = Arrangement.spacedBy(22.dp)) {
         ScreenHeader("Transfers", "Activity from this device")
         Row(verticalAlignment = Alignment.CenterVertically) {
             Text("All activity", style = MaterialTheme.typography.titleLarge)
             Spacer(Modifier.weight(1f))
-            Text("0", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            Text(if (transfer.phase == TransferPhase.Idle) "0" else "1", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        }
+        if (transfer.phase != TransferPhase.Idle) {
+            Surface(Modifier.fillMaxWidth(), color = MaterialTheme.colorScheme.surface, shape = RoundedCornerShape(26.dp)) {
+                Column(Modifier.padding(20.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text(transfer.message.orEmpty(), style = MaterialTheme.typography.titleMedium)
+                    if (transfer.phase == TransferPhase.Sending) Text("${transfer.percent}% · ${formatFileSize(transfer.bytesSent)} of ${formatFileSize(transfer.totalBytes)} · ${transfer.bytesPerSecond?.let { formatFileSize(it) + "/s" } ?: "Speed pending"}${transfer.etaSeconds?.let { " · ETA ${it}s" } ?: ""}")
+                    if (transfer.phase in setOf(TransferPhase.Preparing, TransferPhase.WaitingApproval, TransferPhase.Sending)) androidx.compose.material3.OutlinedButton(onClick = onCancel) { Text("Cancel transfer") }
+                }
+            }
         }
         Surface(Modifier.fillMaxWidth(), color = MaterialTheme.colorScheme.surface, shape = RoundedCornerShape(26.dp)) {
             EmptyState(
