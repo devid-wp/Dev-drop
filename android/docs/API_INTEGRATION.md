@@ -96,16 +96,25 @@ connection and attempts to cancel the current pending approval.
 ## PC to phone offers and downloads
 
 `GET /api/incoming-offers` returns only offers bound to the caller's session.
+Each offer now includes `sha256`, computed from the private snapshot when the
+offer is created. This additive field lets a native client verify that the
+streamed bytes match the exact offered snapshot without buffering the file.
 Accept or reject using `POST /api/incoming-offers/{id}/accept` or `/reject`.
 Accept sets a short-lived, one-use, secure, HttpOnly cookie scoped to that
 offer's download path. Download with a normal HTTPS GET to
 `/api/incoming-offers/{id}/download`; keep normal platform TLS validation and
-cookie handling. The server streams the file in chunks. `GET
-/api/incoming-offers/{id}/state` returns server-sent byte count and status for
+send both the same session's Bearer authorization and the returned path-scoped
+cookie. The server streams the file in chunks. Android writes the response to a
+user-selected Storage Access Framework document, verifies Content-Length and
+SHA-256 while writing, and removes the partial destination on cancellation or
+failure. `GET /api/incoming-offers/{id}/state` returns server-sent byte count and status for
 the authorized recipient session. Those bytes mean the server emitted response
-data; they do not prove Android persisted the downloaded file. Use a streaming
-download sink (for example, a SAF destination) if the native app later needs a
-reliable local saved-byte count.
+data; they do not prove Android persisted the downloaded file. Android reports
+completion locally only after the stream hash matches and the SAF output closes
+successfully. The backend still has no client receipt acknowledgement, so its
+`sent` state is not proof of local persistence. A future compatible extension
+could add a session-bound `POST /api/incoming-offers/{id}/receipt` with the
+verified byte count and digest, recorded separately from server stream status.
 
 ## Phone to phone relay
 
@@ -121,10 +130,11 @@ through the computer and is not device-to-device transport.
 ## Progress semantics
 
 For uploads, client-side request bytes and server-side validation/completion are
-separate events. For downloads, server stream progress reports bytes emitted by
-the server; it cannot report whether a browser or OS saved the file. An Android
-implementation should report downloaded/saved bytes only when its own streaming
-sink confirms writes. Polling can use a modest interval (about one second while
-active, stopped when terminal); do not persist each chunk to SQLite. The desktop
-owner's approval is a separate confirmation and must never be bypassed by the
-mobile client.
+separate events. For downloads, Android reports bytes only after its SAF output
+stream accepts each bounded chunk; speed and ETA appear after a real sample
+interval. Completion requires exact Content-Length, matching SHA-256, and a
+successful output close. The backend's `sent_bytes` describes bytes emitted by
+the server, not local persistence. Incoming offers are polled while the
+Transfers or Incoming screen is visible and the Activity is started. The
+desktop owner's approval and the recipient's separate Accept action remain
+distinct confirmations.

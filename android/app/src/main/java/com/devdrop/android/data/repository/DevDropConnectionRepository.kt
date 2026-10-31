@@ -1,22 +1,36 @@
 package com.devdrop.android.data.repository
 
 import android.content.Context
+import android.net.Uri
 import com.devdrop.android.data.model.ConnectionException
 import com.devdrop.android.data.model.DiscoveredServer
+import com.devdrop.android.data.model.IncomingFileOffer
 import com.devdrop.android.data.model.TrustedConnection
 import com.devdrop.android.data.network.DevDropDiscoveryClient
 import com.devdrop.android.data.network.DevDropHttpClient
+import com.devdrop.android.data.network.DownloadStreamFailure
+import com.devdrop.android.data.network.IncomingOfferFailure
 import com.devdrop.android.data.network.ServerAddress
+import com.devdrop.android.data.network.VerifiedDownload
 import com.devdrop.android.data.security.SecureConnectionStore
 import com.devdrop.android.data.security.ServerTrust
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.withContext
+import java.io.IOException
 
 interface DevDropConnectionRepository {
     suspend fun discover(): List<DiscoveredServer>
     suspend fun pair(address: String, caDer: ByteArray, confirmedCaFingerprint: String, code: String): TrustedConnection
     suspend fun reconnect(saved: TrustedConnection): TrustedConnection
     suspend fun verify(connection: TrustedConnection)
+    suspend fun incomingOffers(connection: TrustedConnection): List<IncomingFileOffer>
+    suspend fun rejectIncomingOffer(connection: TrustedConnection, offerId: String)
+    suspend fun downloadIncomingOffer(connection: TrustedConnection, offer: IncomingFileOffer, destination: Uri,
+                                      checkActive: () -> Unit, onBytesWritten: (Long) -> Unit): VerifiedDownload
+    fun discardIncomingDestination(destination: Uri)
+    fun cancelIncomingDownload()
+    fun invalidateSession()
     fun savedConnection(): TrustedConnection?
     fun disconnect()
 }
@@ -25,6 +39,9 @@ class DefaultDevDropConnectionRepository(context: Context) : DevDropConnectionRe
     private val discovery = DevDropDiscoveryClient(context)
     private val secureStore = SecureConnectionStore(context)
     private val http = DevDropHttpClient()
+    private val incomingApi = DevDropHttpClient()
+    private val incomingDownloader = DevDropHttpClient()
+    private val contentResolver = context.applicationContext.contentResolver
 
     override suspend fun discover(): List<DiscoveredServer> = discovery.scan()
 
@@ -67,6 +84,69 @@ class DefaultDevDropConnectionRepository(context: Context) : DevDropConnectionRe
             secureStore.clearSession()
             throw error
         }
+    }
+
+    override suspend fun incomingOffers(connection: TrustedConnection): List<IncomingFileOffer> = withContext(Dispatchers.IO) {
+        incomingApi.incomingOffers(connection.address, connection.caCertificateDer, connection.token)
+    }
+
+    override suspend fun rejectIncomingOffer(connection: TrustedConnection, offerId: String) = withContext(Dispatchers.IO) {
+        try {
+            incomingApi.rejectIncomingOffer(connection.address, connection.caCertificateDer, connection.token, offerId)
+        } catch (error: ConnectionException.HttpFailure) {
+            if (error.status == 404 || error.status == 409) throw IncomingOfferFailure("unavailable", "This offer expired or was already handled.")
+            throw error
+        }
+    }
+
+    override suspend fun downloadIncomingOffer(connection: TrustedConnection, offer: IncomingFileOffer, destination: Uri,
+                                               checkActive: () -> Unit, onBytesWritten: (Long) -> Unit): VerifiedDownload = withContext(Dispatchers.IO) {
+        var saved = false
+        try {
+            val output = try {
+                contentResolver.openOutputStream(destination, "wt")
+                    ?: throw IncomingOfferFailure("storage", "Android could not open the selected save location.")
+            } catch (error: IncomingOfferFailure) { throw error
+            } catch (error: SecurityException) {
+                throw IncomingOfferFailure("storage", "Android no longer has access to the selected save location.")
+            } catch (error: IOException) {
+                throw IncomingOfferFailure("storage", "Android could not open the selected save location.")
+            }
+            val result = output.use {
+                incomingDownloader.downloadIncomingOffer(connection.address, connection.caCertificateDer,
+                    connection.token, offer, it, checkActive, onBytesWritten)
+            }
+            saved = true
+            result
+        } catch (error: CancellationException) {
+            throw error
+        } catch (error: ConnectionException) {
+            throw error
+        } catch (error: IncomingOfferFailure) {
+            throw error
+        } catch (error: DownloadStreamFailure) {
+            throw error
+        } catch (error: IOException) {
+            throw IncomingOfferFailure("storage", "Could not finish writing the file. Check the selected storage location.")
+        } catch (error: SecurityException) {
+            throw IncomingOfferFailure("storage", "Android denied access to the selected save location.")
+        } finally {
+            if (!saved) deletePartial(destination)
+        }
+    }
+
+    override fun cancelIncomingDownload() {
+        incomingDownloader.cancelActiveDownload()
+        incomingDownloader.cancelActiveRequest()
+    }
+
+    override fun discardIncomingDestination(destination: Uri) = deletePartial(destination)
+
+    override fun invalidateSession() = secureStore.clearSession()
+
+    private fun deletePartial(uri: Uri) {
+        val deleted = runCatching { android.provider.DocumentsContract.deleteDocument(contentResolver, uri) }.getOrDefault(false)
+        if (!deleted) runCatching { contentResolver.delete(uri, null, null) }
     }
 
     override fun savedConnection(): TrustedConnection? = secureStore.load()

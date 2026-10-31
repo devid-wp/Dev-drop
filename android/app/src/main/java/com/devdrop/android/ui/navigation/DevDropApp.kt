@@ -15,7 +15,12 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.Modifier
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import androidx.lifecycle.repeatOnLifecycle
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.isActive
 import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import androidx.navigation.compose.currentBackStackEntryAsState
@@ -40,6 +45,7 @@ fun DevDropApp(viewModel: DevDropViewModel) {
     val currentRoute = backStackEntry?.destination?.route
     val snackbarHostState = remember { SnackbarHostState() }
     val context = LocalContext.current
+    val lifecycleOwner = LocalLifecycleOwner.current
     val codeScanner = remember(context) {
         GmsBarcodeScanning.getClient(context, GmsBarcodeScannerOptions.Builder().setBarcodeFormats(Barcode.FORMAT_QR_CODE).build())
     }
@@ -51,6 +57,21 @@ fun DevDropApp(viewModel: DevDropViewModel) {
     }
     val certificatePicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) {
         it?.let(viewModel::selectCaCertificate)
+    }
+    val receiveDestinationPicker = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("*/*")) {
+        viewModel.incomingDestinationResult(it)
+    }
+
+    LaunchedEffect(currentRoute, state.connection.phase, lifecycleOwner) {
+        if (state.connection.phase == com.devdrop.android.data.model.ConnectionPhase.Connected &&
+            currentRoute in setOf(AppDestination.Transfers.route, "incoming-transfer")) {
+            lifecycleOwner.lifecycle.repeatOnLifecycle(Lifecycle.State.STARTED) {
+                while (isActive) {
+                    viewModel.refreshIncomingOffersNow()
+                    delay(3_000)
+                }
+            }
+        }
     }
 
     LaunchedEffect(state.notice) {
@@ -125,7 +146,16 @@ fun DevDropApp(viewModel: DevDropViewModel) {
                     onCancel = viewModel::cancelTransfer,
                 )
             }
-            composable(AppDestination.Transfers.route) { TransfersScreen(state.transfer, viewModel::cancelTransfer) }
+            composable(AppDestination.Transfers.route) {
+                TransfersScreen(
+                    transfer = state.transfer,
+                    incomingDownload = state.incomingDownload,
+                    pendingOffers = state.incomingOffers.count { it.status == "pending" },
+                    onCancelSend = viewModel::cancelTransfer,
+                    onCancelReceive = viewModel::cancelIncomingDownload,
+                    onOpenIncoming = { navController.navigate("incoming-transfer") },
+                )
+            }
             composable(AppDestination.Settings.route) {
                 SettingsScreen(state.connection) {
                     if (state.connection.phase == com.devdrop.android.data.model.ConnectionPhase.Connected) {
@@ -136,7 +166,22 @@ fun DevDropApp(viewModel: DevDropViewModel) {
             composable("device-details") {
                 DeviceDetailsScreen(state.connection, viewModel::checkConnection, viewModel::disconnect)
             }
-            composable("incoming-transfer") { IncomingTransferScreen() }
+            composable("incoming-transfer") {
+                IncomingTransferScreen(
+                    connected = state.connection.phase == com.devdrop.android.data.model.ConnectionPhase.Connected,
+                    offers = state.incomingOffers,
+                    offersError = state.incomingOffersError,
+                    download = state.incomingDownload,
+                    destinationPickerOpen = state.incomingDownload?.phase == com.devdrop.android.data.IncomingPhase.ChoosingDestination,
+                    onRefresh = viewModel::refreshIncomingOffers,
+                    onBack = { navController.popBackStack() },
+                    onAccept = { offer ->
+                        if (viewModel.beginIncomingAcceptance(offer)) receiveDestinationPicker.launch(offer.filename)
+                    },
+                    onReject = viewModel::rejectIncomingOffer,
+                    onCancelDownload = viewModel::cancelIncomingDownload,
+                )
+            }
         }
     }
 }

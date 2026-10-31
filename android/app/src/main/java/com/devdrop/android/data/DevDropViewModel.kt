@@ -13,11 +13,14 @@ import com.devdrop.android.data.model.ConnectionException
 import com.devdrop.android.data.model.ConnectionPhase
 import com.devdrop.android.data.model.ConnectionUiState
 import com.devdrop.android.data.model.DiscoveredServer
+import com.devdrop.android.data.model.IncomingFileOffer
 import com.devdrop.android.data.model.reduceConnectionPhase
 import com.devdrop.android.data.network.ServerAddress
 import com.devdrop.android.data.network.DevDropHttpClient
 import com.devdrop.android.data.network.UploadSource
 import com.devdrop.android.data.network.TransferFailure
+import com.devdrop.android.data.network.IncomingOfferFailure
+import com.devdrop.android.data.network.DownloadStreamFailure
 import com.devdrop.android.data.repository.DefaultDevDropConnectionRepository
 import com.devdrop.android.data.repository.DevDropConnectionRepository
 import com.devdrop.android.data.security.ServerTrust
@@ -38,12 +41,27 @@ data class DevDropUiState(
     val notice: String? = null,
     val connection: ConnectionUiState = ConnectionUiState(),
     val transfer: TransferUiState = TransferUiState(),
+    val incomingOffers: List<IncomingFileOffer> = emptyList(),
+    val incomingOffersError: String? = null,
+    val incomingDownload: IncomingDownloadUiState? = null,
 )
 
 enum class TransferPhase { Idle, Preparing, WaitingApproval, Sending, Completed, Error, Cancelled }
 data class TransferUiState(val phase: TransferPhase = TransferPhase.Idle, val message: String? = null,
     val bytesSent: Long = 0, val totalBytes: Long = 0, val percent: Int = 0, val bytesPerSecond: Long? = null,
     val etaSeconds: Long? = null)
+
+enum class IncomingPhase { ChoosingDestination, Preparing, Downloading, Completed, Error, Cancelled }
+data class IncomingDownloadUiState(
+    val offer: IncomingFileOffer,
+    val phase: IncomingPhase,
+    val message: String,
+    val bytesReceived: Long = 0,
+    val totalBytes: Long = offer.size,
+    val percent: Int = 0,
+    val bytesPerSecond: Long? = null,
+    val etaSeconds: Long? = null,
+)
 
 internal fun transferFailureMessage(error: Throwable): String = when (error) {
     is TransferFailure -> error.message.orEmpty()
@@ -53,12 +71,28 @@ internal fun transferFailureMessage(error: Throwable): String = when (error) {
     else -> error.message?.takeIf { it.contains("Could not") || it.contains("open") } ?: "Could not send files. Check connection and available disk space."
 }
 
+internal fun incomingFailureMessage(error: Throwable): String = when (error) {
+    is IncomingOfferFailure -> error.message.orEmpty()
+    is DownloadStreamFailure -> error.message.orEmpty()
+    is ConnectionException.SessionExpired -> "Session expired. Connect to the computer again."
+    is ConnectionException.TlsIdentity -> "The server certificate could not be verified. Check the saved CA and server address."
+    is ConnectionException.NetworkUnavailable -> "Connection lost during download. This one-use offer cannot be resumed; ask the computer to send it again."
+    is ConnectionException.HttpFailure -> when (error.status) {
+        401 -> "Session expired. Connect to the computer again."
+        404, 409, 410 -> "This offer expired or was already handled. Ask the computer to send it again."
+        else -> "The server could not provide this file (HTTP ${error.status})."
+    }
+    else -> "Could not save the incoming file. Check the selected storage location and try again."
+}
+
 class DevDropViewModel(
     application: Application,
     private val repository: DevDropConnectionRepository = DefaultDevDropConnectionRepository(application),
 ) : AndroidViewModel(application) {
     private val transferHttp = DevDropHttpClient()
     private var transferJob: Job? = null
+    private var incomingDownloadJob: Job? = null
+    private var destinationOffer: IncomingFileOffer? = null
     private val _uiState = MutableStateFlow(DevDropUiState())
     val uiState: StateFlow<DevDropUiState> = _uiState.asStateFlow()
 
@@ -195,9 +229,12 @@ class DevDropViewModel(
     }
 
     fun disconnect() {
+        cancelIncomingDownload()
+        transferHttp.cancelActiveRequest()
+        transferJob?.cancel()
         viewModelScope.launch(Dispatchers.IO) {
             repository.disconnect()
-            updateConnection { ConnectionUiState(phase = ConnectionPhase.Disconnected) }
+            _uiState.value = DevDropUiState(connection = ConnectionUiState(phase = ConnectionPhase.Disconnected))
         }
     }
 
@@ -214,6 +251,137 @@ class DevDropViewModel(
     }
 
     fun removeFile(file: PickedFile) { _uiState.value = _uiState.value.copy(selectedFiles = _uiState.value.selectedFiles - file) }
+
+    suspend fun refreshIncomingOffersNow() {
+        val saved = repository.savedConnection()
+        if (saved == null || _uiState.value.connection.phase != ConnectionPhase.Connected) {
+            _uiState.value = _uiState.value.copy(incomingOffers = emptyList(),
+                incomingOffersError = if (saved == null) "Connect to a Dev-Drop computer to see incoming files." else null)
+            return
+        }
+        try {
+            val offers = repository.incomingOffers(saved)
+            _uiState.value = _uiState.value.copy(incomingOffers = offers, incomingOffersError = null)
+        } catch (error: Throwable) {
+            if (error is kotlinx.coroutines.CancellationException) throw error
+            if (error is ConnectionException.SessionExpired) {
+                repository.invalidateSession()
+                updateConnection { it.copy(phase = ConnectionPhase.PairingRequired, connectedAddress = null,
+                    connectedName = null, errorMessage = error.message) }
+                _uiState.value = _uiState.value.copy(incomingOffers = emptyList(), incomingOffersError = error.message)
+            } else {
+                _uiState.value = _uiState.value.copy(incomingOffersError = incomingFailureMessage(error))
+            }
+        }
+    }
+
+    fun refreshIncomingOffers() { viewModelScope.launch { refreshIncomingOffersNow() } }
+
+    fun beginIncomingAcceptance(offer: IncomingFileOffer): Boolean {
+        if (incomingDownloadJob?.isActive == true || destinationOffer != null) return false
+        val current = _uiState.value.incomingOffers.firstOrNull { it.id == offer.id && it.status == "pending" }
+        if (current == null) {
+            showNotice("This offer is no longer pending. Refresh the list.")
+            return false
+        }
+        destinationOffer = current
+        _uiState.value = _uiState.value.copy(incomingDownload = IncomingDownloadUiState(current,
+            IncomingPhase.ChoosingDestination, "Choose where to save ${current.filename}. The offer will be accepted after you choose."))
+        return true
+    }
+
+    fun incomingDestinationResult(uri: Uri?) {
+        val offer = destinationOffer
+        if (offer == null) {
+            uri?.let(repository::discardIncomingDestination)
+            return
+        }
+        destinationOffer = null
+        if (uri == null) {
+            _uiState.value = _uiState.value.copy(incomingDownload = IncomingDownloadUiState(offer,
+                IncomingPhase.Cancelled, "Save location cancelled. The offer is still pending."))
+            return
+        }
+        if (incomingDownloadJob?.isActive == true) return
+        incomingDownloadJob = viewModelScope.launch {
+            val saved = repository.savedConnection()
+            if (saved == null || _uiState.value.connection.phase != ConnectionPhase.Connected) {
+                repository.discardIncomingDestination(uri)
+                _uiState.value = _uiState.value.copy(incomingDownload = IncomingDownloadUiState(offer,
+                    IncomingPhase.Error, "Connect to the computer again before downloading."))
+                return@launch
+            }
+            _uiState.value = _uiState.value.copy(incomingDownload = IncomingDownloadUiState(offer,
+                IncomingPhase.Preparing, "Accepting offer and starting secure download…"))
+            var sampleStartedAt = 0L
+            var sampleBytes = 0L
+            try {
+                val result = repository.downloadIncomingOffer(saved, offer, uri, { ensureActive() }) { bytes ->
+                    val now = System.nanoTime()
+                    if (sampleStartedAt == 0L) { sampleStartedAt = now; sampleBytes = bytes }
+                    val elapsedNanos = now - sampleStartedAt
+                    val deltaBytes = bytes - sampleBytes
+                    val rate = (deltaBytes * 1_000_000_000.0 / elapsedNanos.coerceAtLeast(1)).toLong()
+                        .takeIf { elapsedNanos >= 1_000_000_000L && it > 0 }
+                    if (rate != null) { sampleStartedAt = now; sampleBytes = bytes }
+                    val remaining = (offer.size - bytes).coerceAtLeast(0)
+                    _uiState.value = _uiState.value.copy(incomingDownload = IncomingDownloadUiState(offer,
+                        IncomingPhase.Downloading, "Downloading ${offer.filename}…", bytes, offer.size,
+                        if (offer.size > 0) (bytes * 100.0 / offer.size).roundToInt().coerceIn(0, 99) else 0,
+                        rate, if (rate != null) remaining / rate else null))
+                }
+                _uiState.value = _uiState.value.copy(incomingDownload = IncomingDownloadUiState(offer,
+                    IncomingPhase.Completed, "Saved to the selected location · SHA-256 verified.",
+                    result.bytesWritten, offer.size, 100))
+                refreshIncomingOffersNow()
+            } catch (error: kotlinx.coroutines.CancellationException) {
+                repository.cancelIncomingDownload()
+                _uiState.value = _uiState.value.copy(incomingDownload = IncomingDownloadUiState(offer,
+                    IncomingPhase.Cancelled, "Download cancelled. Any partial file was removed."))
+                throw error
+            } catch (error: Throwable) {
+                if (error is ConnectionException.SessionExpired) {
+                    repository.invalidateSession()
+                    updateConnection { it.copy(phase = ConnectionPhase.PairingRequired, connectedAddress = null,
+                        connectedName = null, errorMessage = error.message) }
+                }
+                _uiState.value = _uiState.value.copy(incomingDownload = IncomingDownloadUiState(offer,
+                    IncomingPhase.Error, incomingFailureMessage(error)))
+                refreshIncomingOffersNow()
+            }
+        }
+    }
+
+    fun rejectIncomingOffer(offer: IncomingFileOffer) {
+        if (offer.status != "pending" || incomingDownloadJob?.isActive == true || destinationOffer != null) return
+        viewModelScope.launch {
+            val saved = repository.savedConnection() ?: return@launch
+            runCatching { repository.rejectIncomingOffer(saved, offer.id) }
+                .onSuccess { showNotice("${offer.filename} declined."); refreshIncomingOffersNow() }
+                .onFailure { error ->
+                    if (error is ConnectionException.SessionExpired) {
+                        repository.invalidateSession()
+                        updateConnection { it.copy(phase = ConnectionPhase.PairingRequired, connectedAddress = null,
+                            connectedName = null, errorMessage = error.message) }
+                    }
+                    _uiState.value = _uiState.value.copy(incomingOffersError = incomingFailureMessage(error))
+                    refreshIncomingOffersNow()
+                }
+        }
+    }
+
+    fun cancelIncomingDownload() {
+        val choosing = destinationOffer
+        if (choosing != null) {
+            destinationOffer = null
+            _uiState.value = _uiState.value.copy(incomingDownload = IncomingDownloadUiState(choosing,
+                IncomingPhase.Cancelled, "Save location cancelled. The offer is still pending."))
+            return
+        }
+        repository.cancelIncomingDownload()
+        incomingDownloadJob?.cancel()
+    }
+
     fun sendSelectedFiles() {
         if (transferJob?.isActive == true) return
         val selected = _uiState.value.selectedFiles
@@ -295,6 +463,12 @@ class DevDropViewModel(
     private fun setTransfer(value: TransferUiState) { _uiState.value = _uiState.value.copy(transfer = value) }
     fun clearNotice() { _uiState.value = _uiState.value.copy(notice = null) }
     fun showNotice(message: String) { _uiState.value = _uiState.value.copy(notice = message) }
+
+    override fun onCleared() {
+        transferHttp.cancelActiveRequest()
+        repository.cancelIncomingDownload()
+        super.onCleared()
+    }
 
     private fun restoreConnection() {
         val saved = repository.savedConnection() ?: return

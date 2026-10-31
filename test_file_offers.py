@@ -1,4 +1,5 @@
 import json
+import hashlib
 import tempfile
 import unittest
 from concurrent.futures import ThreadPoolExecutor
@@ -26,6 +27,7 @@ class FileOfferTests(unittest.TestCase):
         offer = self.create()
         self.assertEqual(offer['filename'], 'report.txt')
         self.assertEqual(offer['size'], 8)
+        self.assertEqual(offer['sha256'], hashlib.sha256(b'original').hexdigest())
         self.assertEqual(self.service.list('session-a'), [offer])
         self.assertEqual(self.service.list('session-b'), [])
         for private in ('snapshot', 'recipient', 'grant_hash', 'path'):

@@ -2,9 +2,10 @@
 
 Native Android client scaffold built with Kotlin, Jetpack Compose, Material 3,
 Navigation Compose, ViewModel and StateFlow. It currently provides the four
-navigation destinations and Android system file pickers. Discovery, server
-connection, transfer history and sending are intentionally not wired yet, so the
-app does not show devices or successful transfers that it has not observed.
+navigation destinations and Android system file pickers. It implements real
+server discovery, pinned-CA HTTPS pairing, session restore, phone-to-PC uploads
+with owner approval, and PC-to-phone incoming offers with one-use download
+authorization and streamed SAF saving.
 
 ## Build
 
@@ -14,8 +15,8 @@ Requirements: JDK 17 and Android SDK Platform 35. From this directory run:
 ./gradlew :app:assembleDebug :app:testDebugUnitTest
 ```
 
-The app supports Android API 26 and later. File selection uses the Android Photo
-Picker for photos/videos and the Storage Access Framework for other files; no
-broad storage permission is requested. Network access and TLS trust provisioning
-are not implemented yet. See [API integration notes](docs/API_INTEGRATION.md)
-before connecting this client to a Dev-Drop server.
+The app supports Android API 26 and later. It uses the Android Photo Picker and
+Storage Access Framework; no broad storage permission is requested. The debug
+APK requires a server provisioned with the Dev-Drop HTTPS certificate and CA.
+See [API integration notes](docs/API_INTEGRATION.md) for routes and the server
+receipt limitation.

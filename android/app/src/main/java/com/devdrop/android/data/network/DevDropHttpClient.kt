@@ -1,6 +1,7 @@
 package com.devdrop.android.data.network
 
 import com.devdrop.android.data.model.ConnectionException
+import com.devdrop.android.data.model.IncomingFileOffer
 import com.devdrop.android.data.security.ServerTrust
 import java.io.ByteArrayOutputStream
 import java.io.IOException
@@ -18,8 +19,10 @@ import javax.net.ssl.SSLException
 
 class DevDropHttpClient {
     @Volatile private var activeConnection: HttpsURLConnection? = null
+    @Volatile private var activeDownloadConnection: HttpsURLConnection? = null
 
     fun cancelActiveRequest() { activeConnection?.disconnect() }
+    fun cancelActiveDownload() { activeDownloadConnection?.disconnect() }
 
     fun createFileRequest(address: String, caDer: ByteArray, token: String, files: List<UploadSource>): String {
         val manifest = JSONArray()
@@ -107,6 +110,155 @@ class DevDropHttpClient {
         request(address, "/api/incoming-offers", caDer, token, "GET", null, readBody = false)
     }
 
+    fun incomingOffers(address: String, caDer: ByteArray, token: String): List<IncomingFileOffer> {
+        val body = request(address, "/api/incoming-offers", caDer, token, "GET", null)
+        val offers = JSONObject(body.toString(Charsets.UTF_8)).optJSONArray("offers")
+            ?: throw ConnectionException.InvalidServerResponse
+        return buildList {
+            for (index in 0 until offers.length()) {
+                val item = offers.optJSONObject(index) ?: throw ConnectionException.InvalidServerResponse
+                val identity = item.optString("id")
+                val filename = item.optString("filename")
+                val size = item.optLong("size", -1L)
+                val hash = item.optString("sha256")
+                if (!identity.matches(Regex("[A-Za-z0-9_-]{8,128}")) || filename.isBlank() || size < 0 ||
+                    !hash.matches(Regex("[a-fA-F0-9]{64}"))) {
+                    throw ConnectionException.InvalidServerResponse
+                }
+                add(IncomingFileOffer(identity, filename, size, hash.lowercase(), item.optString("sender", "Unknown sender"),
+                    item.optString("status", "unknown"), item.optDouble("created_at", 0.0), item.optDouble("expires_at", 0.0)))
+            }
+        }
+    }
+
+    fun rejectIncomingOffer(address: String, caDer: ByteArray, token: String, id: String) {
+        request(address, "/api/incoming-offers/${encodePathSegment(id)}/reject", caDer, token, "POST", "{}".toByteArray())
+    }
+
+    /** Accepts once, reads the server's path-scoped one-use cookie, and immediately consumes it. */
+    fun downloadIncomingOffer(
+        address: String,
+        caDer: ByteArray,
+        token: String,
+        offer: IncomingFileOffer,
+        output: OutputStream,
+        checkActive: () -> Unit = {},
+        onBytesWritten: (Long) -> Unit = {},
+    ): VerifiedDownload {
+        checkActive()
+        val encodedId = encodePathSegment(offer.id)
+        val downloadPath = "/api/incoming-offers/$encodedId/download"
+        val cookieName = "__Secure-dd_download_${offer.id}"
+        val (acceptedBody, setCookie) = requestWithSetCookie(address,
+            "/api/incoming-offers/$encodedId/accept", caDer, token, "POST", "{}".toByteArray())
+        val accepted = JSONObject(acceptedBody.toString(Charsets.UTF_8))
+        if (accepted.optString("id") != offer.id || accepted.optLong("size", -1L) != offer.size ||
+            !accepted.optString("sha256").equals(offer.sha256, ignoreCase = true)) {
+            throw ConnectionException.InvalidServerResponse
+        }
+        val cookie = scopedDownloadCookie(setCookie, cookieName, downloadPath)
+            ?: throw ConnectionException.InvalidServerResponse
+        checkActive()
+        val base = ServerAddress.normalize(address) ?: throw ConnectionException.InvalidAddress
+        var connection: HttpsURLConnection? = null
+        try {
+            connection = URL("$base$downloadPath").openConnection(Proxy.NO_PROXY) as? HttpsURLConnection
+                ?: throw ConnectionException.InvalidAddress
+            activeDownloadConnection = connection
+            connection.instanceFollowRedirects = false
+            connection.connectTimeout = 10_000
+            connection.readTimeout = 60_000
+            connection.useCaches = false
+            connection.requestMethod = "GET"
+            connection.sslSocketFactory = ServerTrust.sslContext(caDer).socketFactory
+            connection.hostnameVerifier = HttpsURLConnection.getDefaultHostnameVerifier()
+            connection.setRequestProperty("Accept", "application/octet-stream")
+            connection.setRequestProperty("Accept-Encoding", "identity")
+            connection.setRequestProperty("Authorization", "Bearer $token")
+            connection.setRequestProperty("Cookie", cookie)
+            val status = connection.responseCode
+            if (status !in 200..299) {
+                connection.errorStream?.close()
+                throw incomingHttpFailure(status)
+            }
+            if (status != 200 || connection.contentLengthLong != offer.size) {
+                connection.inputStream.close()
+                throw DownloadStreamFailure("integrity", "The server returned an unexpected file length.")
+            }
+            return connection.inputStream.use { input ->
+                copyVerifiedDownload(input, output, offer.size, offer.sha256, checkActive = checkActive,
+                    onBytesWritten = onBytesWritten)
+            }
+        } catch (error: ConnectionException) {
+            throw error
+        } catch (error: DownloadStreamFailure) {
+            throw error
+        } catch (error: SSLException) {
+            throw mapNetworkError(error)
+        } catch (error: SocketTimeoutException) {
+            throw mapNetworkError(error)
+        } catch (error: IOException) {
+            throw mapNetworkError(error)
+        } finally {
+            activeDownloadConnection = null
+            connection?.disconnect()
+        }
+    }
+
+    private fun requestWithSetCookie(address: String, path: String, caDer: ByteArray, token: String,
+                                     method: String, body: ByteArray): Pair<ByteArray, String?> {
+        val base = ServerAddress.normalize(address) ?: throw ConnectionException.InvalidAddress
+        var connection: HttpsURLConnection? = null
+        try {
+            connection = URL(base + path).openConnection(Proxy.NO_PROXY) as? HttpsURLConnection
+                ?: throw ConnectionException.InvalidAddress
+            activeConnection = connection
+            connection.instanceFollowRedirects = false
+            connection.connectTimeout = 5_000
+            connection.readTimeout = 5_000
+            connection.useCaches = false
+            connection.requestMethod = method
+            connection.sslSocketFactory = ServerTrust.sslContext(caDer).socketFactory
+            connection.hostnameVerifier = HttpsURLConnection.getDefaultHostnameVerifier()
+            connection.setRequestProperty("Accept", "application/json")
+            connection.setRequestProperty("Authorization", "Bearer $token")
+            connection.setRequestProperty("Content-Type", "application/json; charset=utf-8")
+            connection.doOutput = true
+            connection.setFixedLengthStreamingMode(body.size)
+            connection.outputStream.use { it.write(body) }
+            val status = connection.responseCode
+            if (status !in 200..299) {
+                connection.errorStream?.close()
+                throw incomingHttpFailure(status)
+            }
+            val response = connection.inputStream.use { input ->
+                val output = ByteArrayOutputStream()
+                val buffer = ByteArray(4096)
+                while (true) {
+                    val count = input.read(buffer)
+                    if (count < 0) break
+                    if (output.size() + count > MAX_RESPONSE_BYTES) throw ConnectionException.InvalidServerResponse
+                    output.write(buffer, 0, count)
+                }
+                output.toByteArray()
+            }
+            return response to connection.getHeaderField("Set-Cookie")
+        } catch (error: ConnectionException) {
+            throw error
+        } catch (error: IncomingOfferFailure) {
+            throw error
+        } catch (error: SSLException) {
+            throw mapNetworkError(error)
+        } catch (error: SocketTimeoutException) {
+            throw mapNetworkError(error)
+        } catch (error: IOException) {
+            throw mapNetworkError(error)
+        } finally {
+            activeConnection = null
+            connection?.disconnect()
+        }
+    }
+
     private fun request(
         address: String,
         path: String,
@@ -160,6 +312,8 @@ class DevDropHttpClient {
             }
         } catch (error: ConnectionException) {
             throw error
+        } catch (error: IncomingOfferFailure) {
+            throw error
         } catch (error: SSLException) {
             throw mapNetworkError(error)
         } catch (error: SocketTimeoutException) {
@@ -194,6 +348,30 @@ private class CountingOutputStream(out: OutputStream, val count: (Long) -> Unit)
     var countPayload = false
     override fun write(b: Int) { out.write(b); if (countPayload) count(1) }
     override fun write(b: ByteArray, off: Int, len: Int) { out.write(b, off, len); if (countPayload && len > 0) count(len.toLong()) }
+}
+
+class IncomingOfferFailure(val kind: String, message: String) : Exception(message)
+
+internal fun incomingHttpFailure(status: Int): Exception = when (status) {
+    401 -> ConnectionException.SessionExpired
+    404, 409, 410 -> IncomingOfferFailure("unavailable", "This offer expired or has already been handled. Ask the computer to send it again.")
+    507 -> IncomingOfferFailure("storage", "The computer could not access the offered file.")
+    else -> ConnectionException.HttpFailure(status)
+}
+
+internal fun encodePathSegment(value: String): String = URLEncoder.encode(value, "UTF-8")
+    .replace("+", "%20").replace("%21", "!").replace("%27", "'").replace("%28", "(").replace("%29", ")").replace("%7E", "~")
+
+internal fun scopedDownloadCookie(header: String?, name: String, path: String): String? {
+    if (header.isNullOrBlank()) return null
+    val fields = header.split(';').map(String::trim)
+    val pair = fields.firstOrNull()?.takeIf { it.startsWith("$name=") } ?: return null
+    val value = pair.substringAfter('=', "")
+    val attributes = fields.drop(1)
+    if (value.isBlank() || attributes.none { it.equals("Secure", true) } ||
+        attributes.none { it.equals("HttpOnly", true) } ||
+        attributes.none { it.equals("Path=$path", true) }) return null
+    return pair
 }
 
 internal fun mapHttpError(status: Int, authenticated: Boolean, pairingRequest: Boolean): ConnectionException = when {

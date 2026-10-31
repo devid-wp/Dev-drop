@@ -25,6 +25,7 @@ class FileOffer:
     recipient_id: str
     filename: str
     size: int
+    sha256: str
     created_at: float
     expires_at: float
     snapshot: Path
@@ -38,7 +39,7 @@ class FileOffer:
 
     def public(self):
         return {"id": self.id, "recipient_id": self.recipient_id,
-                "filename": self.filename, "size": self.size, "sender": self.sender,
+                "filename": self.filename, "size": self.size, "sha256": self.sha256, "sender": self.sender,
                 "created_at": self.created_at, "expires_at": self.expires_at, "status": self.status,
                 "sent_bytes": self.sent_bytes, "stream_started_at": self.stream_started_at,
                 "stream_finished_at": self.stream_finished_at}
@@ -112,13 +113,17 @@ class FileOfferService:
                 shutil.copyfileobj(incoming, output, length=256 * 1024)
             if validate is not None:
                 validate()
+            digest = hashlib.sha256()
+            with snapshot.open("rb") as saved:
+                while chunk := saved.read(256 * 1024):
+                    digest.update(chunk)
             with self._lock:
                 now = self.clock()
                 expires = min(now + self.lifetime, deadline) if deadline is not None else now + self.lifetime
                 if expires <= now:
                     raise OfferError("File offer expired during preparation")
                 offer = FileOffer(secrets.token_urlsafe(24), recipient, recipient_id,
-                                  safe_upload_name(filename), snapshot.stat().st_size,
+                                  safe_upload_name(filename), snapshot.stat().st_size, digest.hexdigest(),
                                   now, expires, snapshot, status="pending" if published else "preparing",
                                   sender=sender, expire_stream=deadline is not None)
                 self._offers[offer.id] = offer
