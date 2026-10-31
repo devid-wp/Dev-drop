@@ -111,6 +111,7 @@ explicitly approve or reject every pending transfer.
 
 ```bash
 devdrop --help
+devdrop tui
 devdrop status
 devdrop pair
 devdrop transfers
@@ -135,6 +136,12 @@ has no CLI credential store for independently trusted remote CA certificates
 and Bearer sessions. Use the existing GUI, browser or Android client for sends;
 these interfaces continue to require one-use owner approval. CLI command
 coverage and architecture are described in [CLI architecture](docs/CLI_ARCHITECTURE.md).
+
+`devdrop tui` opens the interactive terminal dashboard. Use the sidebar or
+`D`/`T`/`H` to navigate, `R` to refresh, `?` for help, and `Q` to exit. Pending
+transfers always open an explicit review dialog before an approval decision.
+The Transfers screen also shows PC-to-phone offers with server-reported bytes
+sent; the backend does not expose incoming phone-upload progress.
 
 ## Session folders
 

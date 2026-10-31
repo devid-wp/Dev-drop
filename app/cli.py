@@ -254,6 +254,14 @@ def command_serve(args: argparse.Namespace) -> int:
     return EXIT_OK
 
 
+def command_tui(_args: argparse.Namespace) -> int:
+    try:
+        from app.tui import run_tui
+        return run_tui()
+    except ImportError:
+        raise CliError("Textual is not installed. Install the project dependencies to use `devdrop tui`.") from None
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="devdrop", description="Terminal-first local file sharing and DevDrop server administration.")
     subparsers = parser.add_subparsers(dest="command", required=True)
@@ -299,6 +307,9 @@ def build_parser() -> argparse.ArgumentParser:
     sub = subparsers.add_parser("doctor", help="Check TLS, storage, port, and local server readiness")
     sub.add_argument("--json", action="store_true", help="Print JSON")
     sub.set_defaults(handler=command_doctor)
+
+    sub = subparsers.add_parser("tui", help="Open the interactive terminal dashboard")
+    sub.set_defaults(handler=command_tui)
     return parser
 
 

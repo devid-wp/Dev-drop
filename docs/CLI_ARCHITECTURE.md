@@ -43,6 +43,7 @@ local-owner checks and connects requests to existing service objects.
 | `devdrop history` | Available | Reads existing local transfer history. |
 | `devdrop config` | Available | Reads or writes only `session_root` and `port`. |
 | `devdrop doctor` | Available | Checks TLS configuration, writable storage, port availability, and verified local HTTPS health. |
+| `devdrop tui` | Available | Opens a full-screen dashboard over the same local APIs and discovery service. |
 | `devdrop send` | Deferred | There is no secure CLI store for remote CA trust and Bearer sessions. Tokens are not accepted as command arguments or written to ordinary config. |
 | Remote `devdrop pair` | Deferred | Remote pairing requires the same missing remote trust/session store. The current `pair` command displays the local host code only. |
 
@@ -53,6 +54,16 @@ Pairing codes are printed only by the explicit `pair` command. Bearer tokens,
 key passwords, and transfer contents are not logged.
 
 ## Next application-service boundary
+
+The TUI uses `TuiServices` as a thin facade over the existing local API helper,
+`DiscoveryService`, `TLSSettings`, and config functions; it does not own backend
+rules. Refreshes and decisions run in cancellable Textual workers, with short
+request timeouts so shutdown can wait for in-flight work. The TUI reads real
+`/api/outgoing-offers` byte counts for PC-to-phone streams. The backend does not
+expose byte progress for incoming phone uploads, and the TUI reports that
+limitation instead of fabricating a progress bar. Network and config work runs
+in managed background threads with cancellation events, bounded requests, and
+joins during shutdown.
 
 No second abstraction layer is needed for current local commands: the CLI uses
 the existing transport, config, discovery, runtime, store and domain services.
