@@ -8,7 +8,9 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
@@ -23,37 +25,42 @@ import com.devdrop.android.ui.components.ScreenHeader
 
 @Composable
 fun SettingsScreen() {
-    Column(Modifier.fillMaxSize().padding(horizontal = 20.dp), verticalArrangement = Arrangement.spacedBy(20.dp)) {
+    Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(horizontal = 20.dp, vertical = 18.dp),
+        verticalArrangement = Arrangement.spacedBy(20.dp)) {
         ScreenHeader("Settings", "Connection and app information")
-        Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-            SettingRow(DropIconKind.Storage, "Server", "Not connected")
-            SettingRow(DropIconKind.Security, "TLS trust", "Not configured")
-        }
-        Surface(color = MaterialTheme.colorScheme.surface, shape = RoundedCornerShape(21.dp)) {
-            Column(Modifier.fillMaxWidth().padding(17.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                Row {
-                    DropIcon(DropIconKind.Info, tint = MaterialTheme.colorScheme.primary)
-                    Text("About Dev-Drop", Modifier.padding(start = 10.dp), style = MaterialTheme.typography.titleMedium)
+        Text("CONNECTION", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        Surface(color = MaterialTheme.colorScheme.surface, shape = RoundedCornerShape(22.dp)) {
+            Column(Modifier.fillMaxWidth().padding(18.dp), verticalArrangement = Arrangement.spacedBy(18.dp)) {
+                Row(Modifier.fillMaxWidth()) {
+                    DropIcon(DropIconKind.Storage, tint = MaterialTheme.colorScheme.primary)
+                    Column(Modifier.weight(1f).padding(start = 14.dp)) {
+                        Text("Dev-Drop server", style = MaterialTheme.typography.titleMedium)
+                        Text("No server address configured", style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    }
                 }
-                Text("A private, local-network file sharing client.", style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant)
-                Spacer(Modifier.height(2.dp))
-                Text("Version ${BuildConfig.VERSION_NAME}", style = MaterialTheme.typography.labelMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant)
+                Row(Modifier.fillMaxWidth()) {
+                    DropIcon(DropIconKind.Security, tint = MaterialTheme.colorScheme.primary)
+                    Column(Modifier.weight(1f).padding(start = 14.dp)) {
+                        Text("TLS trust", style = MaterialTheme.typography.titleMedium)
+                        Text("Not established", style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    }
+                }
+                ConnectionStatus("Backend integration unavailable")
             }
         }
-        ConnectionStatus("Backend integration not configured")
-    }
-}
-
-@Composable
-private fun SettingRow(icon: DropIconKind, title: String, value: String) {
-    Surface(color = MaterialTheme.colorScheme.surface, shape = RoundedCornerShape(18.dp)) {
-        Row(Modifier.fillMaxWidth().padding(16.dp)) {
-            DropIcon(icon, tint = MaterialTheme.colorScheme.primary)
-            Column(Modifier.padding(start = 12.dp)) {
-                Text(title, style = MaterialTheme.typography.titleSmall)
-                Text(value, style = MaterialTheme.typography.bodySmall,
+        Text("ABOUT", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        Surface(color = MaterialTheme.colorScheme.surface, shape = RoundedCornerShape(22.dp)) {
+            Column(Modifier.fillMaxWidth().padding(18.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                Row {
+                    DropIcon(DropIconKind.Info, tint = MaterialTheme.colorScheme.primary)
+                    Text("About Dev-Drop", Modifier.padding(start = 12.dp), style = MaterialTheme.typography.titleMedium)
+                }
+                Text("A local-network file sharing client.", style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant)
+                Spacer(Modifier.height(1.dp))
+                Text("Version ${BuildConfig.VERSION_NAME}", style = MaterialTheme.typography.labelMedium,
                     color = MaterialTheme.colorScheme.onSurfaceVariant)
             }
         }

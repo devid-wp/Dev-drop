@@ -24,6 +24,8 @@ import com.devdrop.android.ui.screens.nearby.NearbyScreen
 import com.devdrop.android.ui.screens.send.SendScreen
 import com.devdrop.android.ui.screens.settings.SettingsScreen
 import com.devdrop.android.ui.screens.transfers.TransfersScreen
+import com.devdrop.android.ui.screens.device.DeviceDetailsScreen
+import com.devdrop.android.ui.screens.incoming.IncomingTransferScreen
 
 @Composable
 fun DevDropApp(viewModel: DevDropViewModel) {
@@ -48,13 +50,16 @@ fun DevDropApp(viewModel: DevDropViewModel) {
 
     Scaffold(
         modifier = Modifier.fillMaxSize(),
+        containerColor = androidx.compose.material3.MaterialTheme.colorScheme.background,
         snackbarHost = { SnackbarHost(snackbarHostState) },
         bottomBar = {
-            AppNavigationBar(currentRoute) { destination ->
-                navController.navigate(destination.route) {
-                    popUpTo(navController.graph.startDestinationId) { saveState = true }
-                    launchSingleTop = true
-                    restoreState = true
+            if (currentRoute in AppDestination.entries.map { it.route }) {
+                AppNavigationBar(currentRoute) { destination ->
+                    navController.navigate(destination.route) {
+                        popUpTo(navController.graph.startDestinationId) { saveState = true }
+                        launchSingleTop = true
+                        restoreState = true
+                    }
                 }
             }
         },
@@ -80,6 +85,8 @@ fun DevDropApp(viewModel: DevDropViewModel) {
             }
             composable(AppDestination.Transfers.route) { TransfersScreen() }
             composable(AppDestination.Settings.route) { SettingsScreen() }
+            composable("device-details") { DeviceDetailsScreen() }
+            composable("incoming-transfer") { IncomingTransferScreen() }
         }
     }
 }

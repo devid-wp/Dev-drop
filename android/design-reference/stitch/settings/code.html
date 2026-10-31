@@ -1,0 +1,276 @@
+<!DOCTYPE html>
+
+<html class="dark" lang="en"><head><meta charset="utf-8"/><meta content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover" name="viewport"/><meta content="mobile_tab" name="shell-type"/><link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:opsz,wght,FILL,GRAD@20..48,100..700,0..1,-50..200" rel="stylesheet"/><link href="https://fonts.googleapis.com" rel="preconnect"/><link crossorigin="" href="https://fonts.gstatic.com" rel="preconnect"/><link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600&amp;family=Plus+Jakarta+Sans:wght@400;500;600;700&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/><style>@layer base{html,body{width:100%;margin:0;padding:0;background-color:#15121d;}body{overscroll-behavior:none;}.pb-safe{padding-bottom:env(safe-area-inset-bottom,0px);}.pt-safe{padding-top:env(safe-area-inset-top,0px);}main>:first-child{margin-top:0!important;}main>:last-child{margin-bottom:0!important;}}::-webkit-scrollbar{display:none;}</style><script src="https://cdn.tailwindcss.com"></script><script id="tailwind-config">tailwind.config = { darkMode: "class", theme: { extend: { colors: { "secondary-fixed": "#e8deff", "surface-container-high": "#2c2834", "inverse-on-surface": "#322f3b", "outline-variant": "#494454", "on-tertiary": "#003919", "on-tertiary-fixed": "#00210c", "tertiary-container": "#00a755", "on-surface-variant": "#cbc3d7", "on-secondary-fixed-variant": "#4c3c7d", "surface-container": "#211e29", "background": "#15121d", "inverse-primary": "#6d3cd5", "on-surface": "#e7dff0", "surface-container-low": "#1d1a25", "on-tertiary-fixed-variant": "#005227", "secondary": "#cdbdff", "surface": "#15121d", "on-background": "#e7dff0", "on-error-container": "#ffdad6", "surface-dim": "#15121d", "primary": "#d0bcff", "on-primary-fixed": "#23005c", "on-primary-fixed-variant": "#5419bc", "tertiary-fixed-dim": "#4de082", "error-container": "#93000a", "on-primary-container": "#340080", "primary-container": "#9f78ff", "on-primary": "#3b0091", "tertiary": "#4de082", "inverse-surface": "#e7dff0", "surface-container-highest": "#37333f", "on-secondary": "#352565", "secondary-container": "#4e3e80", "on-secondary-fixed": "#1f0c50", "secondary-fixed-dim": "#cdbdff", "on-tertiary-container": "#003115", "surface-container-lowest": "#0f0d17", "error": "#ffb4ab", "tertiary-fixed": "#6dfe9c", "surface-variant": "#37333f", "on-error": "#690005", "outline": "#958ea0", "primary-fixed": "#e9ddff", "primary-fixed-dim": "#d0bcff", "on-secondary-container": "#bfaef8", "surface-tint": "#d0bcff", "surface-bright": "#3b3744" }, borderRadius: { "DEFAULT": "1rem", "lg": "2rem", "xl": "3rem", "full": "9999px" }, spacing: { "space-md": "1rem", "gutter-tablet": "1.5rem", "space-lg": "1.5rem", "space-xs": "0.25rem", "margin": "1rem", "margin-tablet": "2rem", "space-sm": "0.5rem", "gutter": "1rem", "space-xl": "2rem" }, fontFamily: { "label-md": ["JetBrains Mono"], "label-lg": ["JetBrains Mono"], "headline-lg-mobile": ["Plus Jakarta Sans"], "body-sm": ["Plus Jakarta Sans"], "headline-sm": ["Plus Jakarta Sans"], "headline-md": ["Plus Jakarta Sans"], "title-sm": ["Plus Jakarta Sans"], "body-lg": ["Plus Jakarta Sans"], "label-sm": ["JetBrains Mono"], "body-md": ["Plus Jakarta Sans"], "title-md": ["Plus Jakarta Sans"], "headline-lg": ["Plus Jakarta Sans"] }, fontSize: { "label-md": ["11px", { "lineHeight": "16px", "letterSpacing": "0.04em", "fontWeight": "500" }], "label-lg": ["13px", { "lineHeight": "18px", "letterSpacing": "0.02em", "fontWeight": "500" }], "headline-lg-mobile": ["26px", { "lineHeight": "34px", "fontWeight": "700" }], "body-sm": ["12px", { "lineHeight": "16px", "fontWeight": "400" }], "headline-sm": ["18px", { "lineHeight": "24px", "fontWeight": "600" }], "headline-md": ["22px", { "lineHeight": "28px", "fontWeight": "600" }], "title-sm": ["14px", { "lineHeight": "20px", "fontWeight": "600" }], "body-lg": ["16px", { "lineHeight": "24px", "fontWeight": "400" }], "label-sm": ["10px", { "lineHeight": "14px", "letterSpacing": "0.06em", "fontWeight": "400" }], "body-md": ["14px", { "lineHeight": "20px", "fontWeight": "400" }], "title-md": ["16px", { "lineHeight": "22px", "fontWeight": "600" }], "headline-lg": ["32px", { "lineHeight": "40px", "fontWeight": "700" }] } } } }</script><style>
+    body {
+      min-height: max(884px, 100dvh);
+    }
+  </style>
+  </head><body class="bg-surface text-on-surface font-body-md text-body-md min-h-screen flex flex-col antialiased selection:bg-primary selection:text-on-primary"><header class="fixed top-0 inset-x-0 z-50 bg-surface/85 backdrop-blur-xl pt-safe shadow-[0_1px_8px_rgba(0,0,0,0.12)]"><div class="h-28 px-margin flex flex-col justify-between pb-space-sm"><div class="w-full flex items-center justify-between text-on-surface pt-1"><span class="font-label-md text-label-md font-medium tracking-tight text-on-surface">9:41</span><div class="flex items-center gap-space-xs text-on-surface"><span class="material-symbols-outlined text-[15px]">wifi</span><span class="material-symbols-outlined text-[15px]">signal_cellular_alt</span><div class="flex items-center gap-1"><span class="font-label-sm text-label-sm leading-none">100%</span><span class="material-symbols-outlined text-[17px]">battery_full</span></div></div></div><div class="flex items-center justify-between gap-space-sm"><div class="flex items-center gap-space-sm min-w-0"><img alt="Dev-Drop Logo" class="h-8 w-auto object-contain shrink-0" src="https://lh3.googleusercontent.com/aida/AEtjO1Vl6In1wpRway6iaoi6FnsXJt3g3uLUrRsL_RKkGpMkQfjxHXSPsNgLHF2KoymShebXRwefVS0dEwOdJ4x_eIoQXkuopCKZuEHbtaDdzZei1oiI4GcymWPJUPzQt_-VXCN2sCUvXNJs0NfBHFoBr_7o2NSJMbtLWulS2YRYcHUK-5aph95h7QK8H38NjC7AyH62DdaOpCSd5elh39-qLcRv_oa6VzaG33AXq4Kd83sb"/><div class="flex flex-col min-w-0"><div class="flex items-center gap-space-xs"><span class="font-headline-sm text-headline-sm font-semibold tracking-tight text-on-surface truncate">Dev-Drop</span><span class="font-label-sm text-label-sm px-1.5 py-0.5 rounded-full bg-surface-container-high text-primary">v2.0</span></div><div class="flex items-center gap-1 text-on-surface-variant"><span class="w-1.5 h-1.5 rounded-full bg-tertiary shrink-0 animate-pulse"></span><span class="font-label-sm text-label-sm truncate">LocalNet-5G</span></div></div></div><div class="flex items-center gap-space-xs shrink-0"><span class="hidden">Settings</span><button aria-label="Active Network Stats" class="min-w-[44px] min-h-[44px] flex items-center justify-center text-on-surface-variant hover:text-on-surface rounded-full transition-colors" type="button"><span class="material-symbols-outlined text-[20px]">hub</span></button><img alt="Profile" class="w-8 h-8 rounded-full object-cover shrink-0 ml-1" src="https://lh3.googleusercontent.com/aida-public/AB6AXuCwBPmmm6dgihtpi0UtWc3Kgig_ib-mqHJ7bjcKd1A8hADY5bTATgpygwxCpJEjU3KZ1_rtNLG3rtd7TfO7HHBRz7Zmalle7oy0gAJ7CpPwQKE-rchrOqwSNiPBaAbnZMrfWBG-SJAvQP3qZZXjOQj4nDcBCPUyVpBkxt7razFC3LLQuH6a3v1KmwD_L54lV_yhPTcClX3wzNzVX66j4GvV1sBeAtgyXizGSW7Mgkc"/></div></div></div></header><main class="flex-1 flex flex-col relative w-full pt-28 pb-28 px-margin bg-surface"><div class="flex flex-col w-full gap-y-space-md select-none">
+<!-- Subtle Atmospheric Radial Glow -->
+<div class="relative overflow-hidden rounded-2xl bg-surface-container-low p-space-md shadow-md flex items-center gap-space-md">
+<div class="absolute -right-8 -top-8 w-32 h-32 bg-primary/10 rounded-full blur-2xl pointer-events-none"></div>
+<div class="relative w-12 h-12 rounded-full bg-surface-container flex items-center justify-center shrink-0 shadow-sm">
+<span class="material-symbols-outlined text-[26px] text-primary" style="font-variation-settings: 'FILL' 1;">tune</span>
+</div>
+<div class="flex flex-col min-w-0">
+<h1 class="font-headline-sm text-headline-sm text-on-surface font-semibold tracking-tight leading-tight">Settings</h1>
+<p class="font-body-sm text-body-sm text-on-surface-variant truncate">Personalize your peer discovery &amp; storage pipeline</p>
+</div>
+</div>
+<!-- DEVICE SECTION -->
+<div class="flex flex-col gap-y-1.5">
+<span class="font-label-md text-label-md text-primary tracking-wider font-semibold px-space-xs uppercase">Device</span>
+<div class="bg-surface-container rounded-2xl p-space-xs flex flex-col gap-y-1 shadow-sm">
+<!-- Item 1: Device Name -->
+<div class="group flex items-center justify-between p-space-sm rounded-xl hover:bg-surface-container-high transition-colors active:scale-[0.99] cursor-pointer" role="button" tabindex="0">
+<div class="flex items-center gap-space-sm min-w-0">
+<div class="w-10 h-10 rounded-full bg-surface-container-high flex items-center justify-center text-primary shrink-0 group-hover:bg-primary/20 transition-colors">
+<span class="material-symbols-outlined text-[20px]">phone_android</span>
+</div>
+<div class="flex flex-col min-w-0">
+<span class="font-title-sm text-title-sm text-on-surface font-medium truncate">Device Name</span>
+<span class="font-body-sm text-body-sm text-on-surface-variant truncate">Pixel 8 Pro (Dev-Drop)</span>
+</div>
+</div>
+<div class="flex items-center gap-space-xs shrink-0 pl-space-xs">
+<span class="material-symbols-outlined text-outline text-[18px] group-hover:text-primary transition-colors">edit</span>
+</div>
+</div>
+<!-- Spacing separation -->
+<div class="h-px bg-surface-container-highest/40 mx-space-sm"></div>
+<!-- Item 2: Connection Status -->
+<div class="flex items-center justify-between p-space-sm rounded-xl">
+<div class="flex items-center gap-space-sm min-w-0">
+<div class="w-10 h-10 rounded-full bg-surface-container-high flex items-center justify-center text-on-surface-variant shrink-0">
+<span class="material-symbols-outlined text-[20px]">wifi_tethering</span>
+</div>
+<div class="flex flex-col min-w-0">
+<span class="font-title-sm text-title-sm text-on-surface font-medium truncate">Local Connection Status</span>
+<span class="font-body-sm text-body-sm text-on-surface-variant truncate">Active on Home-Studio-5G</span>
+</div>
+</div>
+<div class="flex items-center gap-1.5 bg-surface-container-lowest px-2.5 py-1 rounded-full shrink-0">
+<span class="w-2 h-2 rounded-full bg-tertiary shrink-0 animate-pulse"></span>
+<span class="font-label-sm text-label-sm text-tertiary font-medium">ONLINE</span>
+</div>
+</div>
+</div>
+</div>
+<!-- SECURITY & TRUST SECTION -->
+<div class="flex flex-col gap-y-1.5">
+<span class="font-label-md text-label-md text-primary tracking-wider font-semibold px-space-xs uppercase">Security &amp; Trust</span>
+<div class="bg-surface-container rounded-2xl p-space-xs flex flex-col gap-y-1 shadow-sm">
+<!-- Item 1: Quick Pairing Toggle -->
+<div class="flex items-center justify-between p-space-sm rounded-xl">
+<div class="flex items-center gap-space-sm min-w-0 pr-space-xs">
+<div class="w-10 h-10 rounded-full bg-surface-container-high flex items-center justify-center text-primary shrink-0">
+<span class="material-symbols-outlined text-[20px]">verified_user</span>
+</div>
+<div class="flex flex-col min-w-0">
+<span class="font-title-sm text-title-sm text-on-surface font-medium truncate">Quick Pairing</span>
+<span class="font-body-sm text-body-sm text-on-surface-variant truncate">Auto-accept from paired devices</span>
+</div>
+</div>
+<!-- Material 3 Switch Element -->
+<button aria-checked="true" class="w-12 h-7 bg-primary-container rounded-full p-0.5 flex items-center transition-colors duration-200 cursor-pointer shrink-0" id="quick-pair-toggle" role="switch" type="button">
+<span class="w-6 h-6 bg-on-primary rounded-full shadow-md transform translate-x-5 transition-transform duration-200 flex items-center justify-center">
+<span class="material-symbols-outlined text-[14px] text-primary">check</span>
+</span>
+</button>
+</div>
+<div class="h-px bg-surface-container-highest/40 mx-space-sm"></div>
+<!-- Item 2: Trusted Devices -->
+<div class="group flex items-center justify-between p-space-sm rounded-xl hover:bg-surface-container-high transition-colors active:scale-[0.99] cursor-pointer" role="button" tabindex="0">
+<div class="flex items-center gap-space-sm min-w-0">
+<div class="w-10 h-10 rounded-full bg-surface-container-high flex items-center justify-center text-on-surface-variant shrink-0 group-hover:text-primary transition-colors">
+<span class="material-symbols-outlined text-[20px]">devices</span>
+</div>
+<div class="flex flex-col min-w-0">
+<span class="font-title-sm text-title-sm text-on-surface font-medium truncate">Trusted Devices</span>
+<span class="font-body-sm text-body-sm text-on-surface-variant truncate">3 devices authorized for auto-sync</span>
+</div>
+</div>
+<div class="flex items-center gap-space-xs shrink-0">
+<span class="font-label-sm text-label-sm px-2 py-0.5 rounded-full bg-surface-container-high text-secondary">3 active</span>
+<span class="material-symbols-outlined text-outline text-[18px]">chevron_right</span>
+</div>
+</div>
+</div>
+</div>
+<!-- STORAGE SECTION -->
+<div class="flex flex-col gap-y-1.5">
+<span class="font-label-md text-label-md text-primary tracking-wider font-semibold px-space-xs uppercase">Storage</span>
+<div class="bg-surface-container rounded-2xl p-space-xs flex flex-col gap-y-1 shadow-sm">
+<!-- Item 1: Download Location -->
+<div class="group flex items-center justify-between p-space-sm rounded-xl hover:bg-surface-container-high transition-colors active:scale-[0.99] cursor-pointer" role="button" tabindex="0">
+<div class="flex items-center gap-space-sm min-w-0">
+<div class="w-10 h-10 rounded-full bg-surface-container-high flex items-center justify-center text-primary shrink-0">
+<span class="material-symbols-outlined text-[20px]" style="font-variation-settings: 'FILL' 1;">folder</span>
+</div>
+<div class="flex flex-col min-w-0">
+<span class="font-title-sm text-title-sm text-on-surface font-medium truncate">Download Location</span>
+<span class="font-label-sm text-label-sm text-on-surface-variant truncate">/storage/emulated/0/Download/DevDrop</span>
+</div>
+</div>
+<span class="material-symbols-outlined text-outline text-[18px] shrink-0">folder_open</span>
+</div>
+<div class="h-px bg-surface-container-highest/40 mx-space-sm"></div>
+<!-- Item 2: Transfer History Retention -->
+<div class="group flex items-center justify-between p-space-sm rounded-xl hover:bg-surface-container-high transition-colors active:scale-[0.99] cursor-pointer" role="button" tabindex="0">
+<div class="flex items-center gap-space-sm min-w-0">
+<div class="w-10 h-10 rounded-full bg-surface-container-high flex items-center justify-center text-on-surface-variant shrink-0">
+<span class="material-symbols-outlined text-[20px]">history</span>
+</div>
+<div class="flex flex-col min-w-0">
+<span class="font-title-sm text-title-sm text-on-surface font-medium truncate">Transfer History</span>
+<span class="font-body-sm text-body-sm text-on-surface-variant truncate">Retain logs and hashes for 30 days</span>
+</div>
+</div>
+<div class="flex items-center gap-space-xs shrink-0">
+<span class="font-label-sm text-label-sm text-secondary">30d</span>
+<span class="material-symbols-outlined text-outline text-[18px]">expand_more</span>
+</div>
+</div>
+<div class="h-px bg-surface-container-highest/40 mx-space-sm"></div>
+<!-- Item 3: Clear Temporary Cache -->
+<div class="flex items-center justify-between p-space-sm rounded-xl">
+<div class="flex items-center gap-space-sm min-w-0 pr-space-xs">
+<div class="w-10 h-10 rounded-full bg-error-container/20 flex items-center justify-center text-error shrink-0">
+<span class="material-symbols-outlined text-[20px]">delete_sweep</span>
+</div>
+<div class="flex flex-col min-w-0">
+<span class="font-title-sm text-title-sm text-on-surface font-medium truncate">Temporary Cache</span>
+<span class="font-label-sm text-label-sm text-error truncate" id="cache-size-text">1.53 GB temporary chunks</span>
+</div>
+</div>
+<button class="px-3.5 py-1.5 rounded-full bg-surface-container-high text-error hover:bg-error-container/30 active:scale-95 transition-all text-label-md font-label-md flex items-center gap-1 shrink-0 font-medium" id="clear-cache-btn" type="button">
+<span class="material-symbols-outlined text-[16px]">clean_hands</span>
+<span>Clear</span>
+</button>
+</div>
+</div>
+</div>
+<!-- APPLICATION SECTION -->
+<div class="flex flex-col gap-y-1.5">
+<span class="font-label-md text-label-md text-primary tracking-wider font-semibold px-space-xs uppercase">Application</span>
+<div class="bg-surface-container rounded-2xl p-space-xs flex flex-col gap-y-1 shadow-sm">
+<!-- Item 1: Notifications Toggle -->
+<div class="flex items-center justify-between p-space-sm rounded-xl">
+<div class="flex items-center gap-space-sm min-w-0 pr-space-xs">
+<div class="w-10 h-10 rounded-full bg-surface-container-high flex items-center justify-center text-primary shrink-0">
+<span class="material-symbols-outlined text-[20px]">notifications_active</span>
+</div>
+<div class="flex flex-col min-w-0">
+<span class="font-title-sm text-title-sm text-on-surface font-medium truncate">Notifications</span>
+<span class="font-body-sm text-body-sm text-on-surface-variant truncate">Transfer completion alerts</span>
+</div>
+</div>
+<button aria-checked="true" class="w-12 h-7 bg-primary-container rounded-full p-0.5 flex items-center transition-colors duration-200 cursor-pointer shrink-0" id="notify-toggle" role="switch" type="button">
+<span class="w-6 h-6 bg-on-primary rounded-full shadow-md transform translate-x-5 transition-transform duration-200 flex items-center justify-center">
+<span class="material-symbols-outlined text-[14px] text-primary">check</span>
+</span>
+</button>
+</div>
+<div class="h-px bg-surface-container-highest/40 mx-space-sm"></div>
+<!-- Item 2: About Dev-Drop -->
+<div class="group flex items-center justify-between p-space-sm rounded-xl hover:bg-surface-container-high transition-colors active:scale-[0.99] cursor-pointer" role="button" tabindex="0">
+<div class="flex items-center gap-space-sm min-w-0">
+<div class="w-10 h-10 rounded-full bg-surface-container-high flex items-center justify-center text-secondary shrink-0">
+<span class="material-symbols-outlined text-[20px]">info</span>
+</div>
+<div class="flex flex-col min-w-0">
+<span class="font-title-sm text-title-sm text-on-surface font-medium truncate">About Dev-Drop</span>
+<span class="font-label-sm text-label-sm text-on-surface-variant truncate">Version 2.0.4-rc (M3 Android)</span>
+</div>
+</div>
+<div class="flex items-center gap-space-xs shrink-0 text-on-surface-variant group-hover:text-primary transition-colors">
+<span class="font-label-sm text-label-sm">GitHub</span>
+<span class="material-symbols-outlined text-[18px]">open_in_new</span>
+</div>
+</div>
+</div>
+</div>
+<!-- Developer Diagnostics Footer Pill -->
+<div class="flex justify-between items-center bg-surface-container-lowest px-space-md py-space-sm rounded-full mt-space-xs">
+<div class="flex items-center gap-2">
+<span class="w-2 h-2 rounded-full bg-tertiary"></span>
+<span class="font-label-sm text-label-sm text-on-surface-variant">P2P PROTOCOL v2.4</span>
+</div>
+<span class="font-label-sm text-label-sm text-outline">SHA256 CHECKSUM ENGAGED</span>
+</div>
+</div>
+<script>
+  (function() {
+    // Interactive Toggles
+    const toggleSetup = (btnId) => {
+      const btn = document.getElementById(btnId);
+      if (!btn) return;
+      btn.addEventListener('click', () => {
+        const isChecked = btn.getAttribute('aria-checked') === 'true';
+        const thumb = btn.querySelector('span');
+        const icon = btn.querySelector('.material-symbols-outlined');
+
+        if (isChecked) {
+          btn.setAttribute('aria-checked', 'false');
+          btn.className = 'w-12 h-7 bg-surface-container-highest rounded-full p-0.5 flex items-center transition-colors duration-200 cursor-pointer shrink-0';
+          thumb.className = 'w-6 h-6 bg-outline rounded-full shadow-md transform translate-x-0 transition-transform duration-200 flex items-center justify-center';
+          if (icon) icon.textContent = 'close';
+        } else {
+          btn.setAttribute('aria-checked', 'true');
+          btn.className = 'w-12 h-7 bg-primary-container rounded-full p-0.5 flex items-center transition-colors duration-200 cursor-pointer shrink-0';
+          thumb.className = 'w-6 h-6 bg-on-primary rounded-full shadow-md transform translate-x-5 transition-transform duration-200 flex items-center justify-center';
+          if (icon) icon.textContent = 'check';
+        }
+      });
+    };
+
+    toggleSetup('quick-pair-toggle');
+    toggleSetup('notify-toggle');
+
+    // Dynamic Clear Cache feedback
+    const clearBtn = document.getElementById('clear-cache-btn');
+    const cacheText = document.getElementById('cache-size-text');
+    if (clearBtn && cacheText) {
+      clearBtn.addEventListener('click', () => {
+        clearBtn.classList.add('opacity-50', 'pointer-events-none');
+        clearBtn.innerHTML = '<span class="material-symbols-outlined text-[16px] animate-spin">refresh</span><span>Cleaning</span>';
+
+        setTimeout(() => {
+          cacheText.textContent = '0 B cached chunks';
+          cacheText.classList.remove('text-error');
+          cacheText.classList.add('text-tertiary');
+          clearBtn.innerHTML = '<span class="material-symbols-outlined text-[16px]">done</span><span>Cleared</span>';
+          clearBtn.classList.remove('text-error', 'opacity-50');
+          clearBtn.classList.add('text-tertiary');
+        }, 700);
+      });
+    }
+
+    // Set Settings Tab to Active in Shell Nav Bar
+    try {
+      const navLinks = document.querySelectorAll('nav a');
+      navLinks.forEach(link => {
+        const pill = link.querySelector('.nav-pill');
+        const label = link.querySelector('.nav-label');
+        if (link.getAttribute('data-path') === 'settings') {
+          if (pill) {
+            pill.className = 'nav-pill w-16 h-8 rounded-full flex items-center justify-center transition-all bg-primary-container text-on-primary';
+          }
+          if (label) {
+            label.className = 'nav-label font-label-md text-label-md mt-1 transition-colors text-on-surface font-semibold';
+          }
+        } else {
+          if (pill) {
+            pill.className = 'nav-pill w-16 h-8 rounded-full flex items-center justify-center transition-all bg-transparent text-on-surface-variant hover:bg-surface-container-high';
+          }
+          if (label) {
+            label.className = 'nav-label font-label-md text-label-md mt-1 transition-colors text-on-surface-variant';
+          }
+        }
+      });
+    } catch (e) {
+      // Graceful fallback if DOM is isolated
+    }
+  })();
+</script></main><nav class="fixed bottom-0 inset-x-0 z-50 bg-surface-container/90 backdrop-blur-xl shadow-[0_-2px_12px_rgba(0,0,0,0.2)] pb-safe" data-active-classes="[&amp;_.nav-pill]:bg-primary-container [&amp;_.nav-pill]:text-on-primary [&amp;_.nav-label]:text-on-surface [&amp;_.nav-label]:font-semibold"><div class="flex justify-around items-center h-20 px-space-xs"><a class="group flex flex-col items-center justify-center min-w-[48px] min-h-[48px] w-16 text-on-surface-variant transition-all" data-path="nearby" href="#"><div class="nav-pill w-16 h-8 rounded-full flex items-center justify-center transition-all bg-transparent text-on-surface-variant group-hover:bg-surface-container-high"><span class="material-symbols-outlined text-[22px]">radar</span></div><span class="nav-label font-label-md text-label-md mt-1 transition-colors text-on-surface-variant">Nearby</span></a><a class="group flex flex-col items-center justify-center min-w-[48px] min-h-[48px] w-16 text-on-surface-variant transition-all" data-path="send" href="#"><div class="nav-pill w-16 h-8 rounded-full flex items-center justify-center transition-all bg-transparent text-on-surface-variant group-hover:bg-surface-container-high"><span class="material-symbols-outlined text-[22px]">upload_file</span></div><span class="nav-label font-label-md text-label-md mt-1 transition-colors text-on-surface-variant">Send</span></a><a class="group flex flex-col items-center justify-center min-w-[48px] min-h-[48px] w-16 text-on-surface-variant transition-all" data-path="transfers" href="#"><div class="nav-pill w-16 h-8 rounded-full flex items-center justify-center transition-all bg-transparent text-on-surface-variant group-hover:bg-surface-container-high"><span class="material-symbols-outlined text-[22px]">swap_horiz</span></div><span class="nav-label font-label-md text-label-md mt-1 transition-colors text-on-surface-variant">Transfers</span></a><a aria-current="page" class="group flex flex-col items-center justify-center min-w-[48px] min-h-[48px] w-16 text-on-surface-variant transition-all [&amp;_.nav-pill]:bg-primary-container [&amp;_.nav-pill]:text-on-primary [&amp;_.nav-label]:text-on-surface [&amp;_.nav-label]:font-semibold" data-path="settings" href="#"><div class="nav-pill w-16 h-8 rounded-full flex items-center justify-center transition-all bg-transparent text-on-surface-variant group-hover:bg-surface-container-high"><span class="material-symbols-outlined text-[22px]">settings</span></div><span class="nav-label font-label-md text-label-md mt-1 transition-colors text-on-surface-variant">Settings</span></a></div><div class="w-full flex justify-center py-1 pb-1.5"><div class="w-28 h-1 rounded-full bg-outline-variant/60"></div></div></nav></body></html>
