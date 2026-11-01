@@ -84,6 +84,20 @@ https://127.0.0.1:8765/panel
 Start the HTTPS server and panel with `./run-panel.sh`; it uses the same
 first-run TLS flow as `devdrop serve`.
 
+### Terminal CLI
+
+Run `./start-devdrop.sh` to open the interactive TUI. To run a CLI command
+without activating `.venv` or typing the Python module path, pass it to the
+same script:
+
+```bash
+./start-devdrop.sh serve
+./start-devdrop.sh pair
+./start-devdrop.sh doctor
+```
+
+The script creates `.venv` and installs the project dependencies on first run.
+
 The panel is served by the existing FastAPI process and is restricted to direct
 loopback requests with a loopback Host. It shows paired sessions, discovered
 servers, incoming approvals, outgoing offer states, history, pairing details
