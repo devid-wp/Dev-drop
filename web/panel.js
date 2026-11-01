@@ -86,6 +86,13 @@ async function refresh() {
   refreshBusy = false;
   byId("refresh").classList.remove("spinning");
 }
+async function refreshPairing() {
+  await Promise.all([
+    loadGroup("pairingRequests", "/api/pairing/requests", result => Array.isArray(result.requests) ? result.requests : []),
+    loadGroup("pairingQr", "/api/pairing/qr", result => result),
+  ]);
+  renderPairing();
+}
 
 function renderAll() {
   const ok = data.status !== null;
@@ -263,4 +270,5 @@ byId("dialog-reject").addEventListener("click",event=>{event.preventDefault();de
 byId("pairing-approve").addEventListener("click",event=>{event.preventDefault();decidePairing(true);});
 window.addEventListener("hashchange",showPage);
 window.setInterval(refresh,15000);
+window.setInterval(refreshPairing,3000);
 showPage();refresh();

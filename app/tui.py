@@ -399,6 +399,7 @@ class DevDropTui(App[None]):
             table.add_columns(*columns)
         self._apply_config_inputs()
         self.refresh_data()
+        self.set_interval(3.0, self._poll_updates)
 
     def on_resize(self, event) -> None:
         self._apply_responsive_layout(event.size.width)
@@ -465,6 +466,12 @@ class DevDropTui(App[None]):
                     self.post_message(UiNotice("Could not load DevDrop state."))
         self._start_background("refresh", load)
 
+    def _poll_updates(self) -> None:
+        # Modal dialogs replace the queryable screen tree. Defer rendering while
+        # one is open; the next poll refreshes the tables after it closes.
+        if len(self.screen_stack) == 1:
+            self.refresh_data()
+
     def _start_background(self, name: str, operation: Callable[[threading.Event], None]) -> None:
         self._cancel_task(name, wait=False)
         cancelled = threading.Event()
@@ -504,6 +511,9 @@ class DevDropTui(App[None]):
         self.query_one("#status-line", Static).update(message)
 
     def on_snapshot_loaded(self, message: SnapshotLoaded) -> None:
+        if len(self.screen_stack) > 1:
+            self.snapshot_data = message.snapshot
+            return
         self._apply_snapshot(message.snapshot)
 
     def on_ui_notice(self, message: UiNotice) -> None:

@@ -100,12 +100,12 @@ class Element{constructor(id=''){this.id=id;this.children=[];this.handlers={};th
  append(...nodes){this.children.push(...nodes)}appendChild(n){this.children.push(n)}replaceChildren(...nodes){this.children=[...nodes];this._text=''}
  addEventListener(name,fn){this.handlers[name]=fn}setAttribute(k,v){this.attributes[k]=v}removeAttribute(k){delete this.attributes[k]}
  querySelector(sel){if(sel==='span'){if(!this.span)this.span=new Element();return this.span}return new Element()}
- showModal(){this.open=true}close(){this.open=false}}
+ showModal(){this.open=true}close(){this.open=false}focus(){}}
 const els=new Map(),get=id=>{if(!els.has(id))els.set(id,new Element(id));return els.get(id)};
 const nav=['dashboard','devices','transfers','history','security','settings'].map(x=>{const e=new Element();e.dataset.page=x;return e});
 const pageEls=['dashboard','devices','transfers','history','security','settings'].map(x=>{const e=new Element('page-'+x);e.id='page-'+x;return e});
 const refreshEls=[new Element()];let failHistory=false;const calls=[];let requests=[];
-const responses={ '/api/status':{pairing_code:'987654321',connected_devices:0,session_path:'/tmp/devdrop-session'},'/api/recipient-sessions':{sessions:[]},'/api/discover':{servers:[]},'/api/transfer-requests':null,'/api/outgoing-offers':{offers:[]},'/api/history':{transfers:[]},'/api/pairing-code':{code:'123456789',expires_in:180} };
+const responses={ '/api/status':{pairing_code:'987654321',connected_devices:0,session_path:'/tmp/devdrop-session'},'/api/recipient-sessions':{sessions:[]},'/api/discover':{servers:[]},'/api/transfer-requests':null,'/api/outgoing-offers':{offers:[]},'/api/history':{transfers:[]},'/api/pairing/qr':{version:1,url:'https://localhost:8765',state:'ready',attempt_id:'a'.repeat(24),token:'t'.repeat(48),expires_in:90,qr_svg:'<svg></svg>'},'/api/pairing/requests':{requests:[]} };
 const context=vm.createContext({document:{getElementById:get,createElement:tag=>{const e=new Element();e.tag=tag;return e},querySelectorAll:s=>s==='.nav-link'?nav:s==='.page'?pageEls:s==='.refresh-page'?refreshEls:[]},
  location:{hash:'#dashboard',protocol:'https:',host:'localhost:8765'},window:{location:{hash:'#dashboard',protocol:'https:',host:'localhost:8765'},addEventListener(){},setInterval(){return 1},clearTimeout(){},setTimeout(){return 1},confirm(){return true}},
  fetch:async(path,options={})=>{calls.push([path,options]);if(path==='/api/history'&&failHistory)return{ok:false,status:503,json:async()=>({})};if(path==='/api/transfer-requests'&&options.method==='POST')return{ok:true,status:200,json:async()=>({})};if(path==='/api/transfer-requests')return{ok:true,status:200,json:async()=>({requests})};const data=responses[path]||{};return{ok:true,status:200,json:async()=>data};}});
@@ -118,6 +118,8 @@ vm.runInContext(fs.readFileSync('web/panel.js','utf8'),context);
  assert.match(get('pending-transfers').textContent,/No transfer requests/);
  assert(!get('page-dashboard').textContent.includes('987654321'));
  assert.equal(get('setting-path').textContent,'/tmp/devdrop-session');
+ assert(get('pairing-qr').classList.contains('visible'));
+ assert.match(get('pairing-state').textContent,/Ready to scan/);
  assert.equal(calls.filter(([p,o])=>p.includes('/approve')||p.includes('/reject')).length,0);
  requests=[{id:'request-1',type:'file',status:'pending',sender:'Phone',description:'photo.png',size:12,files:[{name:'photo.png',size:12,sha256:'a'.repeat(64)}],created_at:new Date().toISOString()}];
  await vm.runInContext('refresh()',context);
@@ -127,6 +129,19 @@ vm.runInContext(fs.readFileSync('web/panel.js','utf8'),context);
  assert.equal(calls.filter(([p,o])=>p.includes('/approve')||p.includes('/reject')).length,0);
  await vm.runInContext("decide('approve')",context);
  assert(calls.some(([p,o])=>p==='/api/transfer-requests/request-1/approve'&&o.method==='POST'));
+ responses['/api/pairing/requests']={requests:[{attempt_id:'pairing-1',device:'Pixel',peer:'192.168.1.20',expires_in:80}]};
+ await vm.runInContext('refresh()',context);
+ assert.equal(get('pairing-requests').children.length,1);
+ const pairApprove=get('pairing-requests').children[0].children[2].children[1];pairApprove.onclick();
+ assert.equal(get('pairing-dialog').open,true);
+ get('pairing-confirmation-code').value='123456';
+ await vm.runInContext('decidePairing(true)',context);
+ assert(calls.some(([p,o])=>p==='/api/pairing/requests/pairing-1/approve'&&o.method==='POST'&&JSON.parse(o.body).code==='123456'));
+ responses['/api/recipient-sessions']={sessions:[{id:'b'.repeat(64),agent:'Pixel',peer:'192.168.1.20'}]};
+ await vm.runInContext('refresh()',context);
+ const remove=get('paired-devices').children[0].children[3].children[0];remove.handlers.click();
+ await new Promise(resolve=>setTimeout(resolve,0));
+ assert(calls.some(([p,o])=>p==='/api/recipient-sessions/'+('b'.repeat(64))+'/revoke'&&o.method==='POST'));
  failHistory=true;await vm.runInContext('refresh()',context);
  assert.match(get('recent-activity').textContent,/could not read transfer history/);
  assert.match(get('history-list').textContent,/could not read transfer history/);
