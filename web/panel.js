@@ -127,11 +127,18 @@ function renderDevices() {
   if(data.sessions===null) paired.append(empty(data.failures.sessions || "Paired sessions are unavailable.",true));
   else if(!data.sessions.length) paired.append(empty("No devices are paired right now."));
   else for(const session of data.sessions){
-    const row=node("div","device-row"),avatar=node("span","device-avatar","◉"),copy=node("div","device-copy"),meta=node("small","device-meta");
+    const row=node("div","device-row"),avatar=node("span","device-avatar","◉"),copy=node("div","device-copy"),meta=node("small","device-meta"),actions=node("div","device-actions");
     copy.append(node("strong","",safe(session.agent,"Paired device")));
     const peer=safe(session.peer,"Address unavailable"), id=safe(session.id,"");
-    meta.textContent=`${peer}${id ? ` · ID ${id.slice(0,8)}` : ""}`;copy.append(meta);row.append(avatar,copy,node("span","status-dot"));paired.append(row);
+    meta.textContent=`${peer}${id ? ` · ID ${id.slice(0,8)}` : ""}`;copy.append(meta);
+    const revoke=node("button","reject-button","Remove");revoke.type="button";revoke.disabled=!id;revoke.addEventListener("click",()=>revokeSession(session));actions.append(revoke);
+    row.append(avatar,copy,node("span","status-dot"),actions);paired.append(row);
   }
+}
+async function revokeSession(session){
+  if(!session.id||!window.confirm(`Revoke the active Dev-Drop session for ${safe(session.agent,"this device")}? It will need to scan a new QR to reconnect.`))return;
+  try{await api(`/api/recipient-sessions/${encodeURIComponent(session.id)}/revoke`,{method:"POST",body:"{}"});showToast("Device session revoked.");await refresh();}
+  catch(error){showToast(error.message||"Could not revoke device session.",true);}
 }
 
 function requestFiles(request) {

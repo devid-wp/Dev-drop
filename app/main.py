@@ -1,4 +1,5 @@
 import hashlib
+import re
 import asyncio
 import base64
 import io
@@ -635,6 +636,21 @@ async def recipient_sessions(request: Request):
     return {"sessions": [{"id": recipient_id(token), "created_at": created,
                            **session_client_info.get(token, {"peer": "unknown", "agent": "Unknown client"})}
                           for token, created in list(sessions.items())]}
+
+
+@app.post("/api/recipient-sessions/{identity}/revoke")
+async def revoke_recipient_session(identity: str, request: Request):
+    offer_owner(request)
+    if not re.fullmatch(r"[a-f0-9]{64}", identity):
+        raise HTTPException(status_code=404, detail="Session not found")
+    target = next((token for token in list(sessions)
+                   if secrets.compare_digest(recipient_id(token), identity) and session_is_valid(token)), None)
+    if target is None:
+        raise HTTPException(status_code=404, detail="Session not found")
+    sessions.pop(target, None)
+    session_client_info.pop(target, None)
+    file_offers.revoke_recipient(target)
+    return JSONResponse({"revoked": True, "id": identity}, headers={"Cache-Control": "no-store"})
 
 
 @app.post("/api/outgoing-offers")
