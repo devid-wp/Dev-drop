@@ -73,7 +73,9 @@ when already streaming. Bytes already sent or buffered cannot be recalled. A
 sender cannot cancel another sender's relay. B uses Reject for its pending offer;
 the desktop owner can also cancel the published offer through existing controls.
 Native downloads do not support resume/retry: a failed stream spends the offer.
-`sent` describes the server stream, not proof that the phone saved the file.
+`sent` describes the server stream. Android may advance its offer to `received`
+after the SAF file is closed and its size and SHA-256 are verified; browser
+downloads stay `sent` because they do not post a receipt.
 
 ## Temporary storage and limits
 

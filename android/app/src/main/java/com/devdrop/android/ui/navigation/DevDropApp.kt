@@ -180,6 +180,7 @@ fun DevDropApp(viewModel: DevDropViewModel) {
                     },
                     onReject = viewModel::rejectIncomingOffer,
                     onCancelDownload = viewModel::cancelIncomingDownload,
+                    onRetryReceipt = viewModel::retryIncomingReceipt,
                 )
             }
         }

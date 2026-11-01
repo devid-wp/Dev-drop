@@ -30,10 +30,13 @@ A successful response includes `{"paired":true,"token":"…"}`. Keep the
 Bearer token only in private app storage, do not put it in a URL, logs, or
 analytics, and send it as `Authorization: Bearer <token>` on session APIs.
 The backend session currently expires after one hour; pairing again creates a
-new session. The current backend does not consume or rotate the code after a
-successful pairing, so it remains reusable until its five-minute expiry or
-owner regeneration. A device name or discovery response is never an
-authorization credential.
+new session. A successful pairing consumes the current five-minute code
+atomically, including when pairing requests race. The owner's next status/code
+read creates a fresh code. Android disconnect clears local credentials and
+best-effort revokes that exact Bearer session with `DELETE /api/session`; an
+offline disconnect cannot reach the server, so its token remains valid there
+until expiry. A device name or discovery response is never an authorization
+credential.
 
 ## TLS identity and first trust
 
@@ -65,8 +68,7 @@ clears the token and requires pairing again.
    certificate or fingerprint.
 3. Enter the current 9-digit pairing code shown by the computer owner. The app
    sends it only after certificate-chain and hostname/SAN validation. The code
-   expires in five minutes but the backend does not consume it after pairing;
-   the owner should regenerate it after onboarding the intended device. Each
+   expires in five minutes and the first successful pairing consumes it. Each
    file transfer still requires its separate computer-owner approval.
 
 The Android app does not alter the phone's global CA store. Browser trust
@@ -107,14 +109,15 @@ send both the same session's Bearer authorization and the returned path-scoped
 cookie. The server streams the file in chunks. Android writes the response to a
 user-selected Storage Access Framework document, verifies Content-Length and
 SHA-256 while writing, and removes the partial destination on cancellation or
-failure. `GET /api/incoming-offers/{id}/state` returns server-sent byte count and status for
-the authorized recipient session. Those bytes mean the server emitted response
-data; they do not prove Android persisted the downloaded file. Android reports
-completion locally only after the stream hash matches and the SAF output closes
-successfully. The backend still has no client receipt acknowledgement, so its
-`sent` state is not proof of local persistence. A future compatible extension
-could add a session-bound `POST /api/incoming-offers/{id}/receipt` with the
-verified byte count and digest, recorded separately from server stream status.
+failure. Only after the SAF output closes successfully, Android sends a
+session-bound `POST /api/incoming-offers/{id}/receipt` containing the written
+byte count and SHA-256. The backend checks the recipient session, exact size,
+and snapshot digest before changing `sent` to `received`; an exact retry is
+idempotent. Other sizes or digests, foreign sessions, and receipts before the
+stream finishes are rejected. `GET /api/incoming-offers/{id}/state` exposes the
+separate server `sent` and receiver `received` states. If saving succeeds but
+the receipt request fails, Android keeps the verified file and offers a receipt
+retry; it does not download or overwrite the file again.
 
 ## Phone to phone relay
 

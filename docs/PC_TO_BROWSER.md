@@ -36,7 +36,17 @@ direct-loopback/Origin/Host checks; mutations require JSON Content-Type.
 | `GET /api/incoming-offers` | Bearer: only that session's offers and its display ID |
 | `POST /api/incoming-offers/{id}/accept` | Bearer: accept once and receive a scoped download cookie |
 | `POST /api/incoming-offers/{id}/reject` | Bearer: reject a pending offer |
+| `POST /api/incoming-offers/{id}/receipt` | Bearer: confirm a fully sent offer using exact size and SHA-256 |
 | `GET /api/incoming-offers/{id}/download` | Scoped one-use cookie, with the original session still valid |
+| `DELETE /api/session` | Bearer: revoke only the caller's current session |
+
+`DELETE /api/session` revokes only the authenticated caller's current Bearer
+session. Android uses it best-effort on Disconnect after clearing local
+credentials. Pending, accepted, and active offers for that session are cancelled
+and their snapshots removed. Completed `sent` offers remain available for a
+verified receipt. If the phone is offline, server-side authorization remains
+valid until the one-hour session expiry; restart also clears process-local
+sessions.
 
 Download accepts only an offer ID, never a caller-supplied file path. Arbitrary
 query parameters cannot select another file. Paths can be registered only by the
@@ -80,13 +90,19 @@ background thread, leaving the Qt event loop free. The owner can still choose
 sensitive files intentionally: loopback processes remain within the existing
 owner trust boundary.
 
-Offers live for five minutes in one backend process. States:
-`pending -> accepted -> streaming -> sent/failed`; pending can become rejected,
-and pending/accepted can become cancelled or expired. Once streaming starts,
+Offers live for five minutes in one backend process. Native Android can progress
+through `pending -> accepted -> streaming -> sent -> received` by posting a
+verified receipt; browser downloads currently stop at `sent`. Pending can become
+rejected, and pending/accepted can become cancelled or expired. Once streaming starts,
 cancellation, retry and range/resume are not supported. A failed/interrupted
 attempt spends the offer and needs a fresh offer. `sent` means the server finished
-streaming, not proof the phone saved the file. Connection teardown closes the
-file and removes the snapshot, including on disconnect.
+streaming, not proof the phone saved the file. Android sends a receipt only
+after verifying the full content and closing its SAF destination. The server
+changes `sent` to `received` only for the offer's recipient session and the
+exact snapshot size and SHA-256. An exact receipt retry is idempotent. Other
+values, foreign sessions, and acknowledgments before streaming finishes are
+rejected. Connection teardown closes the file and removes the snapshot,
+including on disconnect.
 
 Expired, rejected and cancelled snapshots are removed on service activity;
 shutdown cleans managed temporary storage. State is lost on restart; a hard crash

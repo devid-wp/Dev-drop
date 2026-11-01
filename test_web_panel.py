@@ -46,13 +46,14 @@ def call_panel_asset(asset,peer="127.0.0.1",host="localhost:8765"):
 
 class WebPanelTests(unittest.TestCase):
     def test_panel_is_loopback_only_https_and_does_not_embed_secrets(self):
+        secret_code = main.generate_pairing_code()
         response=call_panel_route()
         self.assertEqual(response.status_code,200)
         self.assertEqual(response.headers.get("cache-control"),"no-store")
         self.assertIn("frame-ancestors 'none'",response.headers.get("content-security-policy"))
         body=response.path.read_bytes()
         self.assertIn(b"/panel-assets/panel.js",body)
-        self.assertNotIn(main.pairing_code.encode(),body)
+        self.assertNotIn(secret_code.encode(),body)
         self.assertEqual(call_panel_asset("panel.css").status_code,200)
         from fastapi import HTTPException
         with self.assertRaises(HTTPException) as remote: call_panel_route(peer="192.0.2.8")

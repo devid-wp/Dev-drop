@@ -43,6 +43,7 @@ fun IncomingTransferScreen(
     onAccept: (IncomingFileOffer) -> Unit,
     onReject: (IncomingFileOffer) -> Unit,
     onCancelDownload: () -> Unit,
+    onRetryReceipt: () -> Unit,
 ) {
     Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(horizontal = 20.dp, vertical = 18.dp),
         verticalArrangement = Arrangement.spacedBy(16.dp)) {
@@ -62,7 +63,7 @@ fun IncomingTransferScreen(
             Text("Could not refresh offers: $it", color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
         }
         offers.forEach { offer -> OfferCard(offer, destinationPickerOpen, onAccept, onReject) }
-        download?.let { DownloadCard(it, onCancelDownload) }
+        download?.let { DownloadCard(it, onCancelDownload, onRetryReceipt) }
     }
 }
 
@@ -101,7 +102,7 @@ private fun OfferCard(offer: IncomingFileOffer, destinationPickerOpen: Boolean,
 }
 
 @Composable
-private fun DownloadCard(download: IncomingDownloadUiState, onCancel: () -> Unit) {
+private fun DownloadCard(download: IncomingDownloadUiState, onCancel: () -> Unit, onRetryReceipt: () -> Unit) {
     Surface(color = MaterialTheme.colorScheme.surface, shape = RoundedCornerShape(24.dp)) {
         Column(Modifier.fillMaxWidth().padding(18.dp), verticalArrangement = Arrangement.spacedBy(9.dp)) {
             Text(download.offer.filename, style = MaterialTheme.typography.titleMedium)
@@ -114,6 +115,9 @@ private fun DownloadCard(download: IncomingDownloadUiState, onCancel: () -> Unit
             }
             if (download.phase in setOf(IncomingPhase.ChoosingDestination, IncomingPhase.Preparing, IncomingPhase.Downloading)) {
                 OutlinedButton(onClick = onCancel, modifier = Modifier.fillMaxWidth(), shape = CircleShape) { Text("Cancel download") }
+            }
+            if (download.phase == IncomingPhase.SavedUnconfirmed) {
+                Button(onClick = onRetryReceipt, modifier = Modifier.fillMaxWidth(), shape = CircleShape) { Text("Retry server confirmation") }
             }
         }
     }
@@ -150,7 +154,8 @@ private fun IncomingFileOffer.statusLabel(): String = when (status) {
     "pending" -> "Waiting for your decision"
     "accepted" -> "Already accepted · ask the computer to resend if needed"
     "streaming" -> "Server is streaming this offer"
-    "sent" -> "Server sent the data · local save is not confirmed here"
+    "sent" -> "Server sent the data · waiting for recipient confirmation"
+    "received" -> "Recipient verified and confirmed the saved file"
     "failed" -> "Server stream failed · ask the computer to resend"
     "expired" -> "Offer expired"
     "rejected" -> "Declined"

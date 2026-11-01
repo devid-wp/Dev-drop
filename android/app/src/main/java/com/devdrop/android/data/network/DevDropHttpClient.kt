@@ -43,6 +43,10 @@ class DevDropHttpClient {
         request(address, "/api/transfer-requests/${URLEncoder.encode(id, "UTF-8")}/cancel", caDer, token, "POST", "{}".toByteArray())
     }
 
+    fun revokeSession(address: String, caDer: ByteArray, token: String) {
+        request(address, "/api/session", caDer, token, "DELETE", null)
+    }
+
     fun uploadFiles(address: String, caDer: ByteArray, token: String, id: String, files: List<UploadSource>,
                     progress: (Long) -> Unit) {
         val boundary = "DevDrop-${java.util.UUID.randomUUID()}"
@@ -133,6 +137,19 @@ class DevDropHttpClient {
 
     fun rejectIncomingOffer(address: String, caDer: ByteArray, token: String, id: String) {
         request(address, "/api/incoming-offers/${encodePathSegment(id)}/reject", caDer, token, "POST", "{}".toByteArray())
+    }
+
+    fun confirmIncomingReceipt(address: String, caDer: ByteArray, token: String,
+                               offer: IncomingFileOffer, result: VerifiedDownload) {
+        val body = JSONObject().put("size", result.bytesWritten).put("sha256", result.sha256).toString().toByteArray()
+        val response = request(address, "/api/incoming-offers/${encodePathSegment(offer.id)}/receipt",
+            caDer, token, "POST", body)
+        val confirmed = JSONObject(response.toString(Charsets.UTF_8))
+        if (confirmed.optString("id") != offer.id || confirmed.optString("status") != "received" ||
+            confirmed.optLong("size", -1L) != offer.size ||
+            !confirmed.optString("sha256").equals(offer.sha256, true)) {
+            throw ConnectionException.InvalidServerResponse
+        }
     }
 
     /** Accepts once, reads the server's path-scoped one-use cookie, and immediately consumes it. */

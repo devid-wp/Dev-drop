@@ -10,7 +10,7 @@ No accounts. No cloud. Just your devices.
 
 - Local network file sharing
 - Text sharing
-- 9-digit pairing code
+- 9-digit pairing code, consumed by the first successful pairing
 - Mobile-friendly web interface
 - Upload files from any device with a browser
 - Take and send photos directly from a phone
@@ -339,3 +339,8 @@ On phone A choose one file and phone B's session under **Recipient**. The comput
 owner must approve the relay; B must then **Accept -> Download**. A can follow or
 cancel it in **Sending through this computer**. Existing **This computer** uploads
 and PC-to-browser offers remain available. See [relay flow and limits](docs/RELAY.md).
+
+For Release Candidate 1 PC/Android smoke checks, see
+[the manual verification checklist](docs/RC1_MANUAL_VERIFICATION.md). Automated
+tests cover API and loopback TLS behavior but do not claim real-device E2E
+coverage.

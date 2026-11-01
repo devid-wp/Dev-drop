@@ -3,6 +3,7 @@ import asyncio
 import secrets
 import shutil
 import sys
+import threading
 import time
 from datetime import datetime, timezone
 from pathlib import Path
@@ -10,7 +11,7 @@ from pathlib import Path
 from fastapi import Depends, FastAPI, File, HTTPException, Request, UploadFile
 from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, StrictInt
 from typing import Literal
 from urllib.parse import urlsplit
 from app.transfer_requests import TransferDescription, TransferError, TransferService
@@ -45,6 +46,7 @@ file_offers = FileOfferService()
 session_client_info: dict[str, dict[str, str]] = {}
 pairing_code = ""
 pairing_created_at = 0.0
+_pairing_lock = threading.RLock()
 # Incremental session counters: updated when a transfer completes, never rescanned.
 _session_stats_count = 0
 _session_stats_bytes = 0
@@ -56,6 +58,11 @@ TRANSFER_COPY_BUFFER_SIZE = 4 * 1024 * 1024
 
 class PairRequest(BaseModel):
     code: str
+
+
+class OfferReceipt(BaseModel):
+    size: StrictInt = Field(ge=0)
+    sha256: str = Field(pattern=r"^[a-fA-F0-9]{64}$")
 
 
 class TextRequest(BaseModel):
@@ -74,6 +81,7 @@ def cleanup_expired_sessions() -> None:
     for token in expired:
         sessions.pop(token, None)
         session_client_info.pop(token, None)
+        file_offers.revoke_recipient(token)
 
 
 def cli_print(message: str = "") -> None:
@@ -100,6 +108,7 @@ def session_is_valid(token: str) -> bool:
     if time.time() - created_at >= SESSION_LIFETIME:
         sessions.pop(token, None)
         session_client_info.pop(token, None)
+        file_offers.revoke_recipient(token)
         return False
 
     return True
@@ -110,10 +119,10 @@ relay_service = RelayService(transfer_service, file_offers, lambda token: sessio
 
 def generate_pairing_code() -> str:
     global pairing_code, pairing_created_at
-
-    pairing_code = f"{secrets.randbelow(1_000_000_000):09d}"
-    pairing_created_at = time.time()
-    return pairing_code
+    with _pairing_lock:
+        pairing_code = f"{secrets.randbelow(1_000_000_000):09d}"
+        pairing_created_at = time.time()
+        return pairing_code
 
 
 def regenerate_pairing_code() -> str:
@@ -121,7 +130,15 @@ def regenerate_pairing_code() -> str:
 
 
 def pairing_is_valid() -> bool:
-    return bool(pairing_code) and time.time() - pairing_created_at < PAIRING_LIFETIME
+    with _pairing_lock:
+        return bool(pairing_code) and time.time() - pairing_created_at < PAIRING_LIFETIME
+
+
+def current_pairing_code() -> tuple[str, int]:
+    with _pairing_lock:
+        if not pairing_code or time.time() - pairing_created_at >= PAIRING_LIFETIME:
+            generate_pairing_code()
+        return pairing_code, max(0, int(PAIRING_LIFETIME - (time.time() - pairing_created_at)))
 
 
 # Cached resolved session dir. `mkdir` + `resolve` are syscalls that used to
@@ -310,9 +327,7 @@ async def discover_servers():
 @app.get("/api/status")
 async def status(request: Request):
     require_local_owner(request)
-
-    if not pairing_is_valid():
-        generate_pairing_code()
+    code, expires_in = current_pairing_code()
 
     cleanup_expired_sessions()
     stats = session_stats()
@@ -321,8 +336,8 @@ async def status(request: Request):
     return {
         "app": "DevDrop",
         "version": "0.1.1",
-        "pairing_code": pairing_code,
-        "pairing_expires_in": max(0, int(PAIRING_LIFETIME - (time.time() - pairing_created_at))),
+        "pairing_code": code,
+        "pairing_expires_in": expires_in,
         "connected_devices": len(sessions),
         "session_path": str(session_dir),
         **stats,
@@ -345,12 +360,10 @@ async def clear_transfer_history(request: Request):
 @app.get("/api/pairing-code")
 async def get_pairing_code(request: Request):
     require_local_owner(request)
-    if not pairing_is_valid():
-        generate_pairing_code()
-
+    code, expires_in = current_pairing_code()
     return {
-        "code": pairing_code,
-        "expires_in": max(0, int(PAIRING_LIFETIME - (time.time() - pairing_created_at))),
+        "code": code,
+        "expires_in": expires_in,
     }
 
 
@@ -367,16 +380,19 @@ async def post_regenerate_pairing_code(request: Request):
 
 @app.post("/api/pair")
 async def pair_device(pair: PairRequest, request: Request):
-    if not pairing_is_valid():
-        generate_pairing_code()
-        raise HTTPException(status_code=401, detail="Pairing code expired")
-
     clean_code = "".join(character for character in pair.code if character.isdigit())
-
-    if not secrets.compare_digest(clean_code, pairing_code):
-        raise HTTPException(status_code=401, detail="Invalid pairing code")
-
-    token = create_session()
+    global pairing_code, pairing_created_at
+    # A single code creates at most one session, including simultaneous requests.
+    with _pairing_lock:
+        if not pairing_code or time.time() - pairing_created_at >= PAIRING_LIFETIME:
+            pairing_code = ""
+            pairing_created_at = 0.0
+            raise HTTPException(status_code=401, detail="Pairing code expired")
+        if not secrets.compare_digest(clean_code, pairing_code):
+            raise HTTPException(status_code=401, detail="Invalid pairing code")
+        token = create_session()
+        pairing_code = ""
+        pairing_created_at = 0.0
     client_ip = request.client.host if request.client else "unknown"
     session_client_info[token] = {"peer": client_ip, "agent": request.headers.get("user-agent", "Unknown client")[:100]}
 
@@ -400,6 +416,15 @@ async def require_transfer_session(request: Request) -> str:
         )
 
     return token
+
+
+@app.delete("/api/session")
+async def revoke_current_session(token: str = Depends(require_transfer_session)):
+    """Revoke only the Bearer session making this request."""
+    sessions.pop(token, None)
+    session_client_info.pop(token, None)
+    file_offers.revoke_recipient(token)
+    return {"revoked": True}
 
 
 @app.middleware("http")
@@ -517,13 +542,14 @@ async def recipient_sessions(request: Request):
 
 
 @app.post("/api/outgoing-offers")
-def create_file_offer(data: OfferCreate, request: Request):
+async def create_file_offer(data: OfferCreate, request: Request):
     offer_owner(request)
     target = next((token for token in list(sessions) if recipient_id(token) == data.recipient_id and session_is_valid(token)), None)
     if target is None:
         raise OfferError("Recipient session is unavailable")
     # Only the local owner may register a path; downloads never take a path.
-    return file_offers.create(Path(data.path), target, data.recipient_id)
+    result = await asyncio.to_thread(file_offers.create, Path(data.path), target, data.recipient_id)
+    return JSONResponse(result, headers={"Cache-Control": "no-store"})
 
 
 @app.get("/api/outgoing-offers")
@@ -567,6 +593,15 @@ async def reject_file_offer(identity: str, token: str = Depends(require_transfer
     return file_offers.reject(identity, token)
 
 
+@app.post("/api/incoming-offers/{identity}/receipt")
+async def receipt_file_offer(identity: str, receipt: OfferReceipt,
+                             token: str = Depends(require_transfer_session)):
+    try:
+        return file_offers.confirm_received(identity, token, receipt.size, receipt.sha256)
+    except OfferError as error:
+        raise HTTPException(status_code=409, detail=str(error))
+
+
 class OfferDownloadResponse(StreamingResponse):
     def __init__(self, *args, cleanup, on_chunk=lambda _amount: None, **kwargs):
         self.cleanup = cleanup
@@ -594,7 +629,7 @@ async def download_file_offer(identity: str, request: Request):
         complete = False
         try:
             while True:
-                file_offers.check_streaming(identity)
+                file_offers.check_streaming(identity, session_is_valid)
                 chunk = source.read(256 * 1024)
                 if not chunk:
                     break

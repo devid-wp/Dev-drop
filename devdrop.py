@@ -33,6 +33,7 @@ def print_banner(ip: str, session_dir: Path) -> None:
     print("╰────────────────────────────────────────────────────────╯")
     print()
     print(f"  Pairing code   {code}")
+    print("  Pairing codes are one-use; run `devdrop pair` for the next device.")
     print(f"  Open           {TLSSettings.load().url(PORT)}")
     print(f"  Session        {session_dir}")
     print()

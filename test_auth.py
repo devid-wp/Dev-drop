@@ -18,7 +18,6 @@ def request(path, method="GET", payload=None, headers=None, host="192.0.2.10", s
 
     async def run():
         delivered = False
-
         async def receive():
             nonlocal delivered
             if not delivered:
@@ -45,6 +44,8 @@ class AuthTests(unittest.TestCase):
         self.enterContext(patch.object(main, "SESSION_DIR", self.root))
         self.enterContext(patch.object(main, "HISTORY_PATH", self.root / "history.json"))
         self.enterContext(patch.object(main, "sessions", {}))
+        self.enterContext(patch.object(main, "session_client_info", {}))
+        main.generate_pairing_code()
         main.invalidate_session_stats()
         self.addCleanup(main.invalidate_session_stats)
 
@@ -97,6 +98,43 @@ class AuthTests(unittest.TestCase):
                                {"Authorization": f"Bearer {token}", "X-Transfer-ID": identity})
         self.assertEqual(status, 200)
         self.assertEqual((self.root / json.loads(body)["filename"]).read_text(), "hello")
+
+    def test_pairing_code_is_consumed_once_and_owner_gets_a_fresh_code(self):
+        code = main.pairing_code
+        status, body = request("/api/pair", "POST", {"code": code})
+        self.assertEqual(status, 200)
+        first = json.loads(body)["token"]
+        self.assertTrue(main.session_is_valid(first))
+        self.assertEqual(main.pairing_code, "")
+        self.assertEqual(request("/api/pair", "POST", {"code": code})[0], 401)
+        next_code = (int(code) + 1) % 1_000_000_000
+        with patch("app.main.secrets.randbelow", return_value=next_code):
+            status, body = request("/api/pairing-code", host="127.0.0.1")
+        self.assertEqual(status, 200)
+        fresh = json.loads(body)["code"]
+        self.assertNotEqual(code, fresh)
+        self.assertEqual(request("/api/pair", "POST", {"code": fresh})[0], 200)
+
+    def test_concurrent_pairing_requests_only_create_one_session(self):
+        from concurrent.futures import ThreadPoolExecutor
+        code = main.pairing_code
+        with ThreadPoolExecutor(max_workers=12) as workers:
+            results = list(workers.map(lambda _: request("/api/pair", "POST", {"code": code}), range(24)))
+        accepted = [body for status, body in results if status == 200]
+        rejected = [status for status, _ in results if status == 401]
+        self.assertEqual(len(accepted), 1)
+        self.assertEqual(len(rejected), 23)
+        self.assertEqual(len(main.sessions), 1)
+
+    def test_authenticated_session_revocation_only_invalidates_current_token(self):
+        token = main.create_session()
+        other = main.create_session()
+        status, body = request("/api/session", "DELETE", headers={"Authorization": f"Bearer {token}"})
+        self.assertEqual(status, 200)
+        self.assertTrue(json.loads(body)["revoked"])
+        self.assertFalse(main.session_is_valid(token))
+        self.assertTrue(main.session_is_valid(other))
+        self.assertEqual(request("/api/session", "DELETE", headers={"Authorization": f"Bearer {token}"})[0], 401)
 
     def test_gui_uses_loopback_pairing_and_authorized_upload(self):
         from devdrop_gui import BackendClient, FileDropArea

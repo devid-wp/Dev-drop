@@ -155,6 +155,32 @@ class FileOfferTests(unittest.TestCase):
         self.assertEqual(self.service.list('session-a')[0]['status'], 'sent')
         self.assertEqual(self.service.list('session-a')[0]['sent_bytes'], 8)
 
+    def test_receipt_requires_sent_state_and_exact_size_and_digest(self):
+        offer = self.create()
+        with self.assertRaises(OfferError):
+            self.service.confirm_received(offer['id'], 'session-a', offer['size'], offer['sha256'])
+        _, grant = self.service.accept(offer['id'], 'session-a')
+        _, stream = self.service.claim(offer['id'], grant, lambda _: True)
+        stream.read()
+        stream.close()
+        self.service.record_stream_bytes(offer['id'], offer['size'])
+        self.service.finish(offer['id'], True)
+        with self.assertRaises(OfferError):
+            self.service.confirm_received(offer['id'], 'foreign-session', offer['size'], offer['sha256'])
+        with self.assertRaises(OfferError):
+            self.service.confirm_received(offer['id'], 'session-a', offer['size'] - 1, offer['sha256'])
+        with self.assertRaises(OfferError):
+            self.service.confirm_received(offer['id'], 'session-a', offer['size'], '0' * 64)
+        with ThreadPoolExecutor(max_workers=8) as pool:
+            confirmations = list(pool.map(lambda _: self.service.confirm_received(
+                offer['id'], 'session-a', offer['size'], offer['sha256']), range(16)))
+        received = confirmations[0]
+        self.assertEqual(received['status'], 'received')
+        self.assertIsNotNone(received['received_at'])
+        self.assertTrue(all(item == received for item in confirmations))
+        with self.assertRaises(OfferError):
+            self.service.confirm_received(offer['id'], 'session-a', offer['size'], '1' * 64)
+
     def test_failed_stream_preserves_only_recipient_scoped_progress(self):
         offer = self.create()
         _, grant = self.service.accept(offer['id'], 'session-a')
@@ -195,9 +221,7 @@ class FileOfferAPITests(unittest.TestCase):
         self.selector = main.recipient_id(self.token)
 
     def create(self):
-        status, body = request('/api/outgoing-offers', 'POST', {'path': str(self.source), 'recipient_id': self.selector}, host='127.0.0.1')
-        self.assertEqual(status, 200)
-        return json.loads(body)['id']
+        return self.service.create(self.source, self.token, self.selector)['id']
 
     def test_local_sessions_and_offer_list_do_not_expose_tokens_or_paths(self):
         status, body = request('/api/recipient-sessions', host='127.0.0.1')
@@ -247,3 +271,52 @@ class FileOfferAPITests(unittest.TestCase):
         self.assertEqual(request('/api/outgoing-offers', 'POST', {'path':str(self.source), 'recipient_id':self.selector,
             'download_path':'/etc/passwd'}, host='127.0.0.1')[0], 422)
         self.assertEqual(request('/api/incoming-offers/..%2Fetc%2Fpasswd/download', headers=self.headers)[0], 409)
+
+    def test_receipt_api_is_session_bound_and_checks_size_hash(self):
+        identity = self.create()
+        other = {'Authorization': f'Bearer {main.create_session()}'}
+        self.assertEqual(request(f'/api/incoming-offers/{identity}/receipt', 'POST',
+            {'size': 5, 'sha256': hashlib.sha256(b'hello').hexdigest()}, self.headers)[0], 409)
+        _, grant = self.service.accept(identity, self.token)
+        _, stream = self.service.claim(identity, grant, main.session_is_valid, self.token)
+        stream.read(); stream.close()
+        self.service.record_stream_bytes(identity, 5)
+        self.service.finish(identity, True)
+        wrong_hash = {'size': 5, 'sha256': '0' * 64}
+        self.assertEqual(request(f'/api/incoming-offers/{identity}/receipt', 'POST', wrong_hash, self.headers)[0], 409)
+        self.assertEqual(request(f'/api/incoming-offers/{identity}/receipt', 'POST',
+            {'size': 4, 'sha256': hashlib.sha256(b'hello').hexdigest()}, self.headers)[0], 409)
+        self.assertEqual(request(f'/api/incoming-offers/{identity}/receipt', 'POST',
+            {'size': 5, 'sha256': hashlib.sha256(b'hello').hexdigest()}, other)[0], 409)
+        self.assertEqual(request(f'/api/incoming-offers/{identity}/receipt', 'POST',
+            {'size': True, 'sha256': hashlib.sha256(b'hello').hexdigest()}, self.headers)[0], 422)
+        status, body = request(f'/api/incoming-offers/{identity}/receipt', 'POST',
+            {'size': 5, 'sha256': hashlib.sha256(b'hello').hexdigest()}, self.headers)
+        self.assertEqual(status, 200)
+        self.assertEqual(json.loads(body)['status'], 'received')
+        status, body = request(f'/api/incoming-offers/{identity}/state', headers=self.headers)
+        self.assertEqual(status, 200)
+        self.assertEqual(json.loads(body)['status'], 'received')
+
+    def test_session_revoke_cancels_recipient_offers_and_grants(self):
+        pending = self.create()
+        accepted = self.create()
+        _, grant = self.service.accept(accepted, self.token)
+        streaming = self.create()
+        _, streaming_grant = self.service.accept(streaming, self.token)
+        _, stream = self.service.claim(streaming, streaming_grant, main.session_is_valid, self.token)
+        status, body = request('/api/session', 'DELETE', headers=self.headers)
+        self.assertEqual(status, 200)
+        self.assertTrue(json.loads(body)['revoked'])
+        statuses = {item['id']: item['status'] for item in self.service.list()}
+        self.assertEqual(statuses[pending], 'cancelled')
+        self.assertEqual(statuses[accepted], 'cancelled')
+        self.assertEqual(statuses[streaming], 'cancelled')
+        with self.assertRaises(OfferError):
+            self.service.claim(accepted, grant, main.session_is_valid, self.token)
+        with self.assertRaises(OfferError):
+            self.service.check_streaming(streaming, main.session_is_valid)
+        stream.close()
+        self.service.finish(streaming, False)
+        self.assertEqual(request('/api/incoming-offers', headers=self.headers)[0], 401)
+        self.assertEqual(list((self.root / 'snapshots').iterdir()), [])

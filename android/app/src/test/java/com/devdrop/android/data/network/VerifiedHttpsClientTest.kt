@@ -43,7 +43,7 @@ class VerifiedHttpsClientTest {
         val digest = MessageDigest.getInstance("SHA-256").digest(payload).joinToString("") { "%02x".format(it) }
         val seen = mutableListOf<Triple<String, String?, String?>>()
         val worker = Thread {
-            repeat(3) {
+            repeat(4) {
                 val socket = server.accept() as javax.net.ssl.SSLSocket
                 socket.use { peer ->
                     peer.startHandshake()
@@ -70,6 +70,8 @@ class VerifiedHttpsClientTest {
                             """{"id":"offer_id123","filename":"sample.bin","size":${payload.size},"sha256":"$digest","sender":"Computer owner","status":"accepted"}""".toByteArray(),
                             "__Secure-dd_download_offer_id123=grant-value; HttpOnly; Path=/api/incoming-offers/offer_id123/download; SameSite=strict; Secure")
                         path == "/api/incoming-offers/offer_id123/download" -> Quad(200, "application/octet-stream", payload, null)
+                        path == "/api/incoming-offers/offer_id123/receipt" -> Quad(200, "application/json",
+                            """{"id":"offer_id123","size":${payload.size},"sha256":"$digest","status":"received"}""".toByteArray(), null)
                         else -> Quad(404, "application/json", "{}".toByteArray(), null)
                     }
                     val cookieHeader = setCookie?.let { "Set-Cookie: $it\r\n" }.orEmpty()
@@ -91,14 +93,17 @@ class VerifiedHttpsClientTest {
             assertEquals(payload.size.toLong(), result.bytesWritten)
             assertEquals(digest, result.sha256)
             assertEquals(true, payload.contentEquals(output.toByteArray()))
+            client.confirmIncomingReceipt(base, ca.der, token, offer, result)
             synchronized(seen) {
-                assertEquals(3, seen.size)
+                assertEquals(4, seen.size)
                 assertTrue(seen.all { it.second == "Bearer $token" })
                 assertEquals("/api/incoming-offers", seen[0].first)
                 assertEquals("/api/incoming-offers/offer_id123/accept", seen[1].first)
                 assertEquals(null, seen[1].third)
                 assertEquals("/api/incoming-offers/offer_id123/download", seen[2].first)
                 assertEquals("__Secure-dd_download_offer_id123=grant-value", seen[2].third)
+                assertEquals("/api/incoming-offers/offer_id123/receipt", seen[3].first)
+                assertEquals(null, seen[3].third)
             }
             worker.join(2_000)
         } finally { server.close() }
@@ -125,7 +130,7 @@ class VerifiedHttpsClientTest {
         val server = serverContext.serverSocketFactory.createServerSocket(0, 4, InetAddress.getByName("127.0.0.1")) as javax.net.ssl.SSLServerSocket
         val seen = mutableListOf<Pair<String, String?>>()
         val worker = Thread {
-            repeat(4) {
+            repeat(5) {
                 val socket = server.accept() as javax.net.ssl.SSLSocket
                 socket.use { peer ->
                     try {
@@ -152,6 +157,7 @@ class VerifiedHttpsClientTest {
                                 200 to "{\"paired\":true,\"token\":\"unit-test-session-token-123456\"}"
                             }
                             requestLine.startsWith("GET /api/incoming-offers ") -> 200 to "{\"offers\":[],\"session_id\":\"test\"}"
+                            requestLine.startsWith("DELETE /api/session ") -> 200 to "{\"revoked\":true}"
                             else -> 404 to "{}"
                         }
                         val bytes = response.toByteArray()
@@ -170,19 +176,22 @@ class VerifiedHttpsClientTest {
             client.health(address, ca.der)
             assertEquals("unit-test-session-token-123456", client.pair(address, ca.der, "123456789"))
             client.verifySession(address, ca.der, "unit-test-session-token-123456")
+            client.revokeSession(address, ca.der, "unit-test-session-token-123456")
             assertThrows(ConnectionException.TlsIdentity::class.java) {
                 client.health("https://127.0.0.1:${server.localPort}", ca.der)
             }
             synchronized(seen) {
-                assertEquals(4, seen.size)
+                assertEquals(5, seen.size)
                 val requests = seen.filterNot { it.first == "PAIR_BODY" }
-                assertEquals(3, requests.size)
+                assertEquals(4, requests.size)
                 assertEquals("GET /api/health HTTP/1.1", requests[0].first)
                 assertNull(requests[0].second)
                 assertEquals("{\"code\":\"123456789\"}", seen.first { it.first == "PAIR_BODY" }.second)
                 assertNull(requests[1].second)
                 assertEquals("GET /api/incoming-offers HTTP/1.1", requests[2].first)
                 assertEquals("Bearer unit-test-session-token-123456", requests[2].second)
+                assertEquals("DELETE /api/session HTTP/1.1", requests[3].first)
+                assertEquals("Bearer unit-test-session-token-123456", requests[3].second)
             }
             worker.join(2_000)
         } finally {

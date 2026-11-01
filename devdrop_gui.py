@@ -974,7 +974,9 @@ class MainWindow(QMainWindow):
                         text += f" | {format_bytes(sent)} / {format_bytes(size)} ({percent}%)"
                     self._outgoing_progress_samples[offer["id"]] = (now, sent)
                 if state == "sent":
-                    text += " | browser save not confirmed"
+                    text += " | server sent; recipient confirmation pending"
+                elif state == "received":
+                    text += " | recipient verified and confirmed the file"
                 self.outgoing_list.addItem(text)
                 item = self.outgoing_list.item(self.outgoing_list.count() - 1)
                 item.setData(Qt.ItemDataRole.UserRole, offer["id"])

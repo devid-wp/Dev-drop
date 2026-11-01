@@ -36,13 +36,14 @@ class FileOffer:
     sent_bytes: int = 0
     stream_started_at: float | None = None
     stream_finished_at: float | None = None
+    received_at: float | None = None
 
     def public(self):
         return {"id": self.id, "recipient_id": self.recipient_id,
                 "filename": self.filename, "size": self.size, "sha256": self.sha256, "sender": self.sender,
                 "created_at": self.created_at, "expires_at": self.expires_at, "status": self.status,
                 "sent_bytes": self.sent_bytes, "stream_started_at": self.stream_started_at,
-                "stream_finished_at": self.stream_finished_at}
+                "stream_finished_at": self.stream_finished_at, "received_at": self.received_at}
 
 
 class FileOfferService:
@@ -156,10 +157,22 @@ class FileOfferService:
         with self._lock:
             return self._get(identity).public()
 
-    def check_streaming(self, identity):
+    def check_streaming(self, identity, session_valid=None):
         with self._lock:
-            if self._get(identity).status != "streaming":
+            offer = self._get(identity)
+            if offer.status != "streaming" or (session_valid is not None and not session_valid(offer.recipient)):
                 raise OfferError("Download was cancelled or expired")
+
+    def revoke_recipient(self, recipient):
+        """Revoke unclaimed or active offers when their Bearer session ends."""
+        with self._lock:
+            revoked = 0
+            for offer in self._offers.values():
+                if offer.recipient == recipient and offer.status in {"pending", "accepted", "streaming"}:
+                    offer.status, offer.grant_hash = "cancelled", None
+                    self._remove(offer)
+                    revoked += 1
+            return revoked
 
     def record_stream_bytes(self, identity, amount):
         """Count server-yielded bytes; this does not prove browser persistence."""
@@ -236,6 +249,21 @@ class FileOfferService:
                     offer.status = "sent" if succeeded else "failed"
                     offer.stream_finished_at = self.clock()
                 self._remove(offer)
+
+    def confirm_received(self, identity, recipient, size, sha256):
+        with self._lock:
+            offer = self._get(identity, recipient)
+            if offer.status == "received":
+                if size == offer.size and hmac.compare_digest(str(sha256).lower(), offer.sha256):
+                    return offer.public()
+                raise OfferError("Receipt does not match the offered file")
+            if offer.status != "sent":
+                raise OfferError("File has not been completely sent")
+            if offer.sent_bytes != offer.size or size != offer.size or not hmac.compare_digest(str(sha256).lower(), offer.sha256):
+                raise OfferError("Receipt does not match the offered file")
+            offer.status = "received"
+            offer.received_at = self.clock()
+            return offer.public()
 
     def close(self):
         with self._lock:

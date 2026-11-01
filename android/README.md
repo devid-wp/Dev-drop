@@ -18,5 +18,8 @@ Requirements: JDK 17 and Android SDK Platform 35. From this directory run:
 The app supports Android API 26 and later. It uses the Android Photo Picker and
 Storage Access Framework; no broad storage permission is requested. The debug
 APK requires a server provisioned with the Dev-Drop HTTPS certificate and CA.
-See [API integration notes](docs/API_INTEGRATION.md) for routes and the server
-receipt limitation.
+Disconnect revokes the current Bearer session when online. Incoming files are
+confirmed by the backend only after the SAF output is closed and Android posts
+the verified size and SHA-256. If that receipt request is interrupted, retry
+the confirmation without downloading the file again. See
+[API integration notes](docs/API_INTEGRATION.md) for routes and limitations.

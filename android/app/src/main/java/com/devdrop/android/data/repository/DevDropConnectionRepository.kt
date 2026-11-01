@@ -28,11 +28,12 @@ interface DevDropConnectionRepository {
     suspend fun rejectIncomingOffer(connection: TrustedConnection, offerId: String)
     suspend fun downloadIncomingOffer(connection: TrustedConnection, offer: IncomingFileOffer, destination: Uri,
                                       checkActive: () -> Unit, onBytesWritten: (Long) -> Unit): VerifiedDownload
+    suspend fun confirmIncomingReceipt(connection: TrustedConnection, offer: IncomingFileOffer, result: VerifiedDownload)
     fun discardIncomingDestination(destination: Uri)
     fun cancelIncomingDownload()
     fun invalidateSession()
     fun savedConnection(): TrustedConnection?
-    fun disconnect()
+    suspend fun disconnect()
 }
 
 class DefaultDevDropConnectionRepository(context: Context) : DevDropConnectionRepository {
@@ -41,6 +42,7 @@ class DefaultDevDropConnectionRepository(context: Context) : DevDropConnectionRe
     private val http = DevDropHttpClient()
     private val incomingApi = DevDropHttpClient()
     private val incomingDownloader = DevDropHttpClient()
+    private val receiptApi = DevDropHttpClient()
     private val contentResolver = context.applicationContext.contentResolver
 
     override suspend fun discover(): List<DiscoveredServer> = discovery.scan()
@@ -135,9 +137,16 @@ class DefaultDevDropConnectionRepository(context: Context) : DevDropConnectionRe
         }
     }
 
+    override suspend fun confirmIncomingReceipt(connection: TrustedConnection, offer: IncomingFileOffer,
+                                                result: VerifiedDownload) = withContext(Dispatchers.IO) {
+        receiptApi.confirmIncomingReceipt(connection.address, connection.caCertificateDer,
+            connection.token, offer, result)
+    }
+
     override fun cancelIncomingDownload() {
         incomingDownloader.cancelActiveDownload()
         incomingDownloader.cancelActiveRequest()
+        receiptApi.cancelActiveRequest()
     }
 
     override fun discardIncomingDestination(destination: Uri) = deletePartial(destination)
@@ -151,7 +160,14 @@ class DefaultDevDropConnectionRepository(context: Context) : DevDropConnectionRe
 
     override fun savedConnection(): TrustedConnection? = secureStore.load()
 
-    override fun disconnect() = secureStore.clear()
+    override suspend fun disconnect() = withContext(Dispatchers.IO) {
+        val saved = secureStore.load()
+        secureStore.clear()
+        if (saved != null) runCatching {
+            http.revokeSession(saved.address, saved.caCertificateDer, saved.token)
+        }
+        Unit
+    }
 
     private fun SecureConnectionStore.disconnectSession() = clearSession()
 }

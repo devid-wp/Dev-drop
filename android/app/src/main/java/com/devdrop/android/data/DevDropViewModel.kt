@@ -21,6 +21,7 @@ import com.devdrop.android.data.network.UploadSource
 import com.devdrop.android.data.network.TransferFailure
 import com.devdrop.android.data.network.IncomingOfferFailure
 import com.devdrop.android.data.network.DownloadStreamFailure
+import com.devdrop.android.data.network.VerifiedDownload
 import com.devdrop.android.data.repository.DefaultDevDropConnectionRepository
 import com.devdrop.android.data.repository.DevDropConnectionRepository
 import com.devdrop.android.data.security.ServerTrust
@@ -51,7 +52,7 @@ data class TransferUiState(val phase: TransferPhase = TransferPhase.Idle, val me
     val bytesSent: Long = 0, val totalBytes: Long = 0, val percent: Int = 0, val bytesPerSecond: Long? = null,
     val etaSeconds: Long? = null)
 
-enum class IncomingPhase { ChoosingDestination, Preparing, Downloading, Completed, Error, Cancelled }
+enum class IncomingPhase { ChoosingDestination, Preparing, Downloading, ConfirmingReceipt, SavedUnconfirmed, Completed, Error, Cancelled }
 data class IncomingDownloadUiState(
     val offer: IncomingFileOffer,
     val phase: IncomingPhase,
@@ -93,6 +94,9 @@ class DevDropViewModel(
     private var transferJob: Job? = null
     private var incomingDownloadJob: Job? = null
     private var destinationOffer: IncomingFileOffer? = null
+    private data class PendingReceipt(val connection: com.devdrop.android.data.model.TrustedConnection,
+                                      val offer: IncomingFileOffer, val result: VerifiedDownload)
+    private var pendingReceipt: PendingReceipt? = null
     private val _uiState = MutableStateFlow(DevDropUiState())
     val uiState: StateFlow<DevDropUiState> = _uiState.asStateFlow()
 
@@ -331,7 +335,29 @@ class DevDropViewModel(
                         rate, if (rate != null) remaining / rate else null))
                 }
                 _uiState.value = _uiState.value.copy(incomingDownload = IncomingDownloadUiState(offer,
-                    IncomingPhase.Completed, "Saved to the selected location · SHA-256 verified.",
+                    IncomingPhase.ConfirmingReceipt, "File saved and SHA-256 verified. Confirming receipt with the computer…",
+                    result.bytesWritten, offer.size, 100))
+                try {
+                    repository.confirmIncomingReceipt(saved, offer, result)
+                    pendingReceipt = null
+                } catch (error: kotlinx.coroutines.CancellationException) {
+                    throw error
+                } catch (error: Throwable) {
+                    pendingReceipt = PendingReceipt(saved, offer, result)
+                    if (error is ConnectionException.SessionExpired) {
+                        repository.invalidateSession()
+                        updateConnection { it.copy(phase = ConnectionPhase.PairingRequired, connectedAddress = null,
+                            connectedName = null, errorMessage = error.message) }
+                    }
+                    _uiState.value = _uiState.value.copy(incomingDownload = IncomingDownloadUiState(offer,
+                        IncomingPhase.SavedUnconfirmed,
+                        "File saved and SHA-256 verified, but the server receipt was not confirmed. ${incomingFailureMessage(error)} Retry when connected.",
+                        result.bytesWritten, offer.size, 100))
+                    refreshIncomingOffersNow()
+                    return@launch
+                }
+                _uiState.value = _uiState.value.copy(incomingDownload = IncomingDownloadUiState(offer,
+                    IncomingPhase.Completed, "Saved and verified · server confirmed receipt.",
                     result.bytesWritten, offer.size, 100))
                 refreshIncomingOffersNow()
             } catch (error: kotlinx.coroutines.CancellationException) {
@@ -348,6 +374,33 @@ class DevDropViewModel(
                 _uiState.value = _uiState.value.copy(incomingDownload = IncomingDownloadUiState(offer,
                     IncomingPhase.Error, incomingFailureMessage(error)))
                 refreshIncomingOffersNow()
+            }
+        }
+    }
+
+    fun retryIncomingReceipt() {
+        val pending = pendingReceipt ?: return
+        if (incomingDownloadJob?.isActive == true) return
+        incomingDownloadJob = viewModelScope.launch {
+            try {
+                repository.confirmIncomingReceipt(pending.connection, pending.offer, pending.result)
+                pendingReceipt = null
+                _uiState.value = _uiState.value.copy(incomingDownload = IncomingDownloadUiState(pending.offer,
+                    IncomingPhase.Completed, "Saved and verified · server confirmed receipt.",
+                    pending.result.bytesWritten, pending.offer.size, 100))
+                refreshIncomingOffersNow()
+            } catch (error: kotlinx.coroutines.CancellationException) {
+                throw error
+            } catch (error: Throwable) {
+                if (error is ConnectionException.SessionExpired) {
+                    repository.invalidateSession()
+                    updateConnection { it.copy(phase = ConnectionPhase.PairingRequired, connectedAddress = null,
+                        connectedName = null, errorMessage = error.message) }
+                }
+                _uiState.value = _uiState.value.copy(incomingDownload = IncomingDownloadUiState(pending.offer,
+                    IncomingPhase.SavedUnconfirmed,
+                    "File remains saved and verified, but receipt confirmation failed. ${incomingFailureMessage(error)} Retry when connected.",
+                    pending.result.bytesWritten, pending.offer.size, 100))
             }
         }
     }
