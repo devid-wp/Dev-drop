@@ -1,9 +1,10 @@
 "use strict";
 
-const pages = ["dashboard", "devices", "transfers", "history", "security", "settings"];
-const labels = {dashboard:"Overview",devices:"Devices",transfers:"Transfers",history:"History",security:"Security",settings:"Settings"};
-const data = {status:null, sessions:[], discovered:[], requests:[], offers:[], history:[], failures:{}};
+const pages = ["dashboard", "devices", "transfers", "history", "security", "settings", "pairing-requests"];
+const labels = {dashboard:"Overview",devices:"Devices",transfers:"Transfers",history:"History",security:"Security",settings:"Settings","pairing-requests":"Connection requests"};
+const data = {status:null, sessions:[], discovered:[], requests:[], offers:[], history:[], pairingRequests:[], pairingQr:null, failures:{}};
 let selectedRequest = null;
+let selectedPairing = null;
 let toastTimer = 0;
 let refreshBusy = false;
 
@@ -18,7 +19,7 @@ async function api(path, options={}) {
   try { body = await response.json(); } catch (_) {}
   if (!response.ok) {
     const messages = {401:"The server refused this request. Reopen the panel from this computer.",403:"This action is available only to the local owner.",404:"This operation is not supported by this server version.",409:"The transfer changed state or is no longer available.",503:"The server could not read transfer history."};
-    throw new Error(messages[response.status] || `Server returned HTTP ${response.status}.`);
+    throw new Error((response.status === 403 && body.detail) || messages[response.status] || `Server returned HTTP ${response.status}.`);
   }
   return body;
 }
@@ -77,6 +78,8 @@ async function refresh() {
     loadGroup("requests", "/api/transfer-requests", result => Array.isArray(result.requests) ? result.requests : []),
     loadGroup("offers", "/api/outgoing-offers", result => Array.isArray(result.offers) ? result.offers : []),
     loadGroup("history", "/api/history", result => Array.isArray(result.transfers) ? result.transfers : []),
+    loadGroup("pairingRequests", "/api/pairing/requests", result => Array.isArray(result.requests) ? result.requests : []),
+    loadGroup("pairingQr", "/api/pairing/qr", result => result),
   ]);
   renderAll();
   byId("last-updated").textContent = `Updated ${new Date().toLocaleTimeString()}`;
@@ -103,7 +106,7 @@ function renderAll() {
   const active = (data.offers || []).filter(item => activeStates.has(item.status));
   byId("active-total").textContent = data.offers === null || data.requests === null ? "—" : String(active.length + pending.length);
   byId("active-caption").textContent = data.offers === null || data.requests === null ? "Transfer state unavailable" : "Pending approvals and outgoing offers";
-  renderDevices(); renderRequests(); renderOffers(); renderHistory(); renderDashboard();
+  renderDevices(); renderRequests(); renderOffers(); renderHistory(); renderDashboard(); renderPairing();
 }
 
 function renderDevices() {
@@ -214,23 +217,43 @@ function renderDashboard() {
 }
 async function loadSecurity() {
   byId("https-state").textContent=location.protocol==="https:"?"HTTPS active":"HTTPS required";
-  if(location.protocol!=="https:"){byId("pair-code").textContent="Unavailable";byId("pair-expiry").textContent="Pairing requires HTTPS.";return;}
-  try{const result=await api("/api/pairing-code");const code=String(result.code||"");byId("pair-code").textContent=/^\d{9}$/.test(code)?`${code.slice(0,3)} ${code.slice(3,6)} ${code.slice(6)}`:"Unavailable";byId("pair-expiry").textContent=`Expires in ${Math.max(0,Number(result.expires_in)||0)} seconds. Visible only on this local panel.`;}
-  catch(error){byId("pair-code").textContent="Unavailable";byId("pair-expiry").textContent=error.message||"Pairing information unavailable.";}
+  if(location.protocol!=="https:"){byId("pairing-state").textContent="Pairing requires HTTPS.";return;}
 }
-async function regenerateCode() {
-  if(!window.confirm("Generate a new pairing code? The current code will stop working."))return;
-  try{await api("/api/regenerate-pairing-code",{method:"POST",body:"{}"});await loadSecurity();showToast("New pairing code generated.");}
-  catch(error){showToast(error.message||"Could not generate pairing code.",true);}
+function renderPairing(){
+  const result=data.pairingQr, image=byId("pairing-qr"), emptyState=byId("pairing-qr-empty");
+  if(!result){byId("pairing-state").textContent=data.failures.pairingQr||"Secure pairing unavailable.";image.classList.remove("visible");emptyState.classList.remove("hidden");emptyState.textContent="QR unavailable";}
+  else if(result.state==="waiting_for_owner"){
+    byId("pairing-state").textContent="A phone is waiting for owner approval.";byId("pairing-expiry").textContent=`Request expires in ${result.expires_in} seconds.`;image.classList.remove("visible");emptyState.classList.remove("hidden");emptyState.textContent="Approve the phone below";
+  } else {
+    byId("pairing-state").textContent="Ready to scan";byId("pairing-expiry").textContent=`One use · expires in ${result.expires_in} seconds`;
+    if(result.qr_svg){image.src=`data:image/svg+xml;charset=utf-8,${encodeURIComponent(result.qr_svg)}`;image.classList.add("visible");emptyState.classList.add("hidden");}
+  }
+  const target=byId("pairing-requests");target.replaceChildren();
+  if(data.pairingRequests===null){target.append(empty(data.failures.pairingRequests||"Connection requests are unavailable.",true));return;}
+  if(!data.pairingRequests.length){target.append(empty("No phone is waiting to connect."));return;}
+  for(const item of data.pairingRequests){
+    const row=node("div","transfer-row"),icon=node("span","file-icon","◉"),copy=node("div","transfer-copy"),actions=node("div","pair-request-actions");
+    copy.append(node("strong","",safe(item.device,"Android phone")),node("small","",`${safe(item.peer,"Address unavailable")} · expires in ${item.expires_in}s`));
+    const reject=node("button","reject-button","Reject"),approve=node("button","approve-button","Check code & approve");reject.type=approve.type="button";reject.onclick=()=>rejectPairing(item);approve.onclick=()=>openPairingDialog(item);actions.append(reject,approve);row.append(icon,copy,actions);target.append(row);
+  }
 }
+function openPairingDialog(item){selectedPairing=item;byId("pairing-dialog-title").textContent=`Connect ${safe(item.device,"this phone")}?`;byId("pairing-dialog-copy").textContent=`Request from ${safe(item.peer,"unknown address")}. Compare the code shown on the phone before approving.`;byId("pairing-confirmation-code").value="";byId("pairing-dialog").showModal();byId("pairing-confirmation-code").focus();}
+async function decidePairing(approve){
+  if(!selectedPairing)return;
+  const id=encodeURIComponent(selectedPairing.attempt_id), code=byId("pairing-confirmation-code").value;
+  if(approve&&!/^\d{6}$/.test(code)){showToast("Enter the six digit code shown on the phone.",true);return;}
+  try{await api(`/api/pairing/requests/${id}/${approve?"approve":"reject"}`,{method:"POST",body:approve?JSON.stringify({code}):"{}"});byId("pairing-dialog").close();selectedPairing=null;showToast(approve?"Phone approved and paired.":"Connection request rejected.");await refresh();}
+  catch(error){showToast(error.message||"Could not update pairing request.",true);await refresh();}
+}
+async function rejectPairing(item){selectedPairing=item;await decidePairing(false);}
 function showToast(message,error=false){const toast=byId("toast");toast.textContent=message;toast.classList.toggle("error",error);toast.classList.add("show");window.clearTimeout(toastTimer);toastTimer=window.setTimeout(()=>toast.classList.remove("show"),3500);}
 
 document.querySelectorAll(".nav-link").forEach(link=>link.addEventListener("click",()=>{if(link.dataset.page)showPage();}));
 document.querySelectorAll(".refresh-page").forEach(button=>button.addEventListener("click",refresh));
 byId("refresh").addEventListener("click",refresh);
-byId("regenerate-code").addEventListener("click",regenerateCode);
 byId("dialog-approve").addEventListener("click",event=>{event.preventDefault();decide("approve");});
 byId("dialog-reject").addEventListener("click",event=>{event.preventDefault();decide("reject");});
+byId("pairing-approve").addEventListener("click",event=>{event.preventDefault();decidePairing(true);});
 window.addEventListener("hashchange",showPage);
 window.setInterval(refresh,15000);
 showPage();refresh();

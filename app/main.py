@@ -1,6 +1,8 @@
 import hashlib
 import asyncio
 import base64
+import io
+import json
 import secrets
 import shutil
 import sys
@@ -25,6 +27,8 @@ from app.uploads import open_unique_upload, safe_upload_name
 from app.pairing import PairingError, PairingService
 from cryptography import x509
 from cryptography.hazmat.primitives.serialization import Encoding
+import qrcode
+from qrcode.image.svg import SvgPathImage
 
 
 if getattr(sys, "frozen", False):
@@ -434,10 +438,21 @@ async def get_qr_pairing(request: Request):
         leaf_der = x509.load_pem_x509_certificate(tls.certificate.read_bytes()).public_bytes(Encoding.DER)
     except (OSError, ValueError, RuntimeError) as error:
         raise HTTPException(status_code=503, detail=f"Secure pairing is unavailable: {error}") from None
-    return {"version": 1, "url": tls.url(SERVER_PORT), **window,
-            "ca_certificate_der": base64.b64encode(ca_bytes).decode("ascii"),
-            "ca_sha256": hashlib.sha256(ca_bytes).hexdigest(),
-            "server_certificate_sha256": hashlib.sha256(leaf_der).hexdigest()}
+    qr_payload = {"version": 1, "url": tls.url(SERVER_PORT), **window,
+                  "ca_certificate_der": base64.b64encode(ca_bytes).decode("ascii"),
+                  "ca_sha256": hashlib.sha256(ca_bytes).hexdigest(),
+                  "server_certificate_sha256": hashlib.sha256(leaf_der).hexdigest()}
+    if window["state"] == "ready":
+        qr = qrcode.QRCode(error_correction=qrcode.constants.ERROR_CORRECT_L, border=4, box_size=5)
+        qr.add_data(json.dumps(qr_payload, separators=(",", ":")))
+        qr.make(fit=True)
+        image = qr.make_image(image_factory=SvgPathImage)
+        buffer = io.BytesIO()
+        image.save(buffer)
+        qr_payload["qr_svg"] = buffer.getvalue().decode("utf-8")
+    else:
+        qr_payload["qr_svg"] = ""
+    return qr_payload
 
 
 @app.post("/api/pairing/claims")

@@ -13,6 +13,7 @@ dependencies = [
   "python-multipart>=0.0.9,<1",
   "textual>=0.80,<2",
   "cryptography>=44,<47",
+  "qrcode>=7.4,<9",
 ]
 
 [project.optional-dependencies]

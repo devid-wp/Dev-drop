@@ -31,6 +31,7 @@
 
       <section class="page active" id="page-dashboard" aria-labelledby="page-title">
         <div class="welcome-row"><div><h2>Your local transfer hub</h2><p>Private device sharing, managed from this computer.</p></div><span class="updated" id="last-updated">Waiting for server data</span></div>
+        <article class="panel-card pairing-hero"><div class="pairing-copy"><span class="dialog-kicker">CONNECT A PHONE</span><h2>Scan to connect</h2><p>Open Dev-Drop on Android, choose <strong>Scan QR</strong>, then compare the short code and approve the phone here.</p><strong id="pairing-state" class="pairing-state">Preparing secure pairing…</strong><small id="pairing-expiry" class="muted-copy"></small></div><div class="pairing-qr-wrap"><img id="pairing-qr" alt="One-time Dev-Drop pairing QR code"><div id="pairing-qr-empty" class="pairing-qr-empty">Waiting for a phone…</div></div></article>
         <div class="stat-grid">
           <article class="stat-card"><div class="stat-heading"><span>Server</span><span class="stat-icon">⌁</span></div><strong id="server-state">—</strong><small id="server-address">Checking local HTTPS</small></article>
           <article class="stat-card"><div class="stat-heading"><span>Connected devices</span><span class="stat-icon">◉</span></div><strong id="device-total">—</strong><small>Active paired sessions</small></article>
@@ -40,6 +41,11 @@
           <article class="panel-card"><div class="section-heading"><div><h2>Recent activity</h2><p>Latest saved files recorded by the server</p></div><a href="#history" class="text-link">View history →</a></div><div id="recent-activity" class="activity-list"><div class="loading">Loading activity…</div></div></article>
           <article class="panel-card"><div class="section-heading"><div><h2>Devices</h2><p>Currently paired sessions</p></div><a href="#devices" class="text-link">View devices →</a></div><div id="dashboard-devices" class="compact-list"><div class="loading">Loading devices…</div></div></article>
         </div>
+      </section>
+
+      <section class="page" id="page-pairing-requests">
+        <div class="page-intro"><div><h2>Connection requests</h2><p>Check the short code shown on the phone before approving.</p></div><button class="secondary-button refresh-page" type="button">↻ Refresh</button></div>
+        <article class="panel-card"><div id="pairing-requests" class="transfer-list"><div class="loading">Checking for phones…</div></div></article>
       </section>
 
       <section class="page" id="page-devices">
@@ -60,7 +66,7 @@
 
       <section class="page" id="page-security">
         <div class="page-intro"><div><h2>Security</h2><p>Local pairing and transport information.</p></div><button id="regenerate-code" class="secondary-button" type="button">Generate new code</button></div>
-        <div class="content-grid security-grid"><article class="panel-card"><div class="section-heading"><div><h3>Pairing code</h3><p>Share only with a device you intend to pair.</p></div></div><div class="pair-code" id="pair-code">••• ••• •••</div><p class="muted-copy" id="pair-expiry">Available to this local owner only.</p></article><article class="panel-card"><div class="section-heading"><div><h3>HTTPS transport</h3><p>TLS is required for pairing and transfers.</p></div></div><div class="security-row"><span>Connection</span><strong id="https-state">Checking…</strong></div><div class="security-row"><span>Panel access</span><strong>Loopback only</strong></div><p class="limitation-note">Certificate fingerprint and expiry are not exposed through the existing browser API. No private key or TLS secret is shown here.</p></article></div>
+        <div class="content-grid security-grid"><article class="panel-card"><div class="section-heading"><div><h3>Device pairing</h3><p>QR token expires after two minutes and can be claimed once.</p></div></div><p class="muted-copy">The six digit number is a human check only. Approve only when it matches the code on the phone.</p><a class="text-link" href="#pairing-requests">Review connection requests →</a></article><article class="panel-card"><div class="section-heading"><div><h3>HTTPS transport</h3><p>TLS is required for pairing and transfers.</p></div></div><div class="security-row"><span>Connection</span><strong id="https-state">Checking…</strong></div><div class="security-row"><span>Panel access</span><strong>Loopback only</strong></div><p class="limitation-note">Public certificate fingerprints may be shown in the QR payload. Private keys and session tokens are never displayed.</p></article></div>
       </section>
 
       <section class="page" id="page-settings">
@@ -73,6 +79,7 @@
   </div>
 
   <dialog id="decision-dialog" class="decision-dialog"><form method="dialog"><span class="dialog-kicker">TRANSFER REQUEST</span><h2 id="dialog-title">Review request</h2><div id="dialog-details" class="dialog-details"></div><p class="dialog-warning">The sender identity is provided by the client and may be unverified.</p><div class="dialog-actions"><button value="cancel" class="secondary-button">Cancel</button><button id="dialog-reject" value="reject" class="danger-button">Reject</button><button id="dialog-approve" value="approve" class="primary-button">Approve</button></div></form></dialog>
+  <dialog id="pairing-dialog" class="decision-dialog"><form method="dialog"><span class="dialog-kicker">PAIR THIS PHONE</span><h2 id="pairing-dialog-title">Confirm the phone</h2><p id="pairing-dialog-copy" class="muted-copy"></p><label class="code-label" for="pairing-confirmation-code">Enter the six digit code shown on the phone</label><input id="pairing-confirmation-code" class="code-input" inputmode="numeric" autocomplete="one-time-code" pattern="[0-9]{6}" maxlength="6" required><div class="dialog-actions"><button value="cancel" class="secondary-button">Cancel</button><button id="pairing-approve" value="approve" class="primary-button">Approve device</button></div></form></dialog>
   <div id="toast" class="toast" role="status" aria-live="polite"></div>
   <script src="/panel-assets/panel.js" defer></script>
 </body>
