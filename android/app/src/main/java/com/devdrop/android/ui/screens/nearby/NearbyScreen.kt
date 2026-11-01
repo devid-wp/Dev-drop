@@ -21,6 +21,10 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.semantics.contentDescription
@@ -45,6 +49,7 @@ fun NearbyScreen(
     onSelectServer: (DiscoveredServer) -> Unit,
     onOpenDetails: () -> Unit,
 ) {
+    var advancedConnection by remember { mutableStateOf(false) }
     Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(horizontal = 20.dp, vertical = 18.dp),
         verticalArrangement = Arrangement.spacedBy(20.dp)) {
         ScreenHeader("Dev-Drop", "Connect to your local server")
@@ -112,15 +117,20 @@ fun NearbyScreen(
             }
         }
 
-        Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-            Text("Connect by address", style = MaterialTheme.typography.titleLarge)
-            OutlinedTextField(value = connection.addressDraft, onValueChange = onAddressChanged,
-                modifier = Modifier.fillMaxWidth(), label = { Text("HTTPS server address") },
-                placeholder = { Text("https://192.168.1.50:8765") }, singleLine = true,
-                supportingText = { Text("Use the address shown by the Dev-Drop computer.") })
-            OutlinedButton(onClick = onConnectAddress, enabled = connection.addressDraft.isNotBlank(),
-                modifier = Modifier.fillMaxWidth().height(50.dp), shape = CircleShape) {
-                Text("Continue to secure setup")
+        TextButton(onClick = { advancedConnection = !advancedConnection }, modifier = Modifier.fillMaxWidth()) {
+            Text(if (advancedConnection) "Hide advanced connection" else "Advanced · connect by address")
+        }
+        if (advancedConnection) {
+            Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                Text("Manual connection", style = MaterialTheme.typography.titleLarge)
+                OutlinedTextField(value = connection.addressDraft, onValueChange = onAddressChanged,
+                    modifier = Modifier.fillMaxWidth(), label = { Text("HTTPS server address") },
+                    placeholder = { Text("https://192.168.1.50:8765") }, singleLine = true,
+                    supportingText = { Text("Legacy pairing requires manual certificate trust. QR pairing is the recommended setup.") })
+                OutlinedButton(onClick = onConnectAddress, enabled = connection.addressDraft.isNotBlank(),
+                    modifier = Modifier.fillMaxWidth().height(50.dp), shape = CircleShape) {
+                    Text("Continue to manual setup")
+                }
             }
         }
         connection.errorMessage?.let { Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error) }
