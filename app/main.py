@@ -1,5 +1,6 @@
 import hashlib
 import asyncio
+import base64
 import secrets
 import shutil
 import sys
@@ -21,6 +22,9 @@ from app.relay import RelayCreate, RelayError, RelayService
 from app.history_store import HistoryStore, HistoryStoreError
 from app.discovery import DiscoveryService
 from app.uploads import open_unique_upload, safe_upload_name
+from app.pairing import PairingError, PairingService
+from cryptography import x509
+from cryptography.hazmat.primitives.serialization import Encoding
 
 
 if getattr(sys, "frozen", False):
@@ -58,6 +62,18 @@ TRANSFER_COPY_BUFFER_SIZE = 4 * 1024 * 1024
 
 class PairRequest(BaseModel):
     code: str
+
+
+class QRPairClaim(BaseModel):
+    attempt_id: str = Field(min_length=16, max_length=100)
+    token: str = Field(min_length=40, max_length=200)
+    poll_key: str = Field(min_length=40, max_length=200)
+    code: str = Field(pattern=r"^[0-9]{6}$")
+    device: str = Field(min_length=1, max_length=100)
+
+
+class QRPairDecision(BaseModel):
+    code: str = Field(pattern=r"^[0-9]{6}$")
 
 
 class OfferReceipt(BaseModel):
@@ -115,6 +131,7 @@ def session_is_valid(token: str) -> bool:
 
 
 relay_service = RelayService(transfer_service, file_offers, lambda token: session_is_valid(token))
+qr_pairing = PairingService(create_session)
 
 
 def generate_pairing_code() -> str:
@@ -406,6 +423,70 @@ async def pair_device(pair: PairRequest, request: Request):
     return {"paired": True, "token": token}
 
 
+@app.get("/api/pairing/qr")
+async def get_qr_pairing(request: Request):
+    require_local_owner(request)
+    from app.transport import TLSSettings
+    try:
+        tls = TLSSettings.load()
+        window = qr_pairing.window()
+        ca_bytes = x509.load_pem_x509_certificate(tls.ca.read_bytes()).public_bytes(Encoding.DER)
+        leaf_der = x509.load_pem_x509_certificate(tls.certificate.read_bytes()).public_bytes(Encoding.DER)
+    except (OSError, ValueError, RuntimeError) as error:
+        raise HTTPException(status_code=503, detail=f"Secure pairing is unavailable: {error}") from None
+    return {"version": 1, "url": tls.url(SERVER_PORT), **window,
+            "ca_certificate_der": base64.b64encode(ca_bytes).decode("ascii"),
+            "ca_sha256": hashlib.sha256(ca_bytes).hexdigest(),
+            "server_certificate_sha256": hashlib.sha256(leaf_der).hexdigest()}
+
+
+@app.post("/api/pairing/claims")
+async def create_qr_pairing_claim(claim: QRPairClaim, request: Request):
+    peer = request.client.host if request.client else "unknown"
+    try:
+        return qr_pairing.claim(claim.attempt_id, claim.token, claim.poll_key,
+                                claim.code, claim.device, peer)
+    except PairingError as error:
+        raise HTTPException(status_code=error.status, detail=str(error)) from None
+
+
+@app.get("/api/pairing/claims/{identity}")
+async def get_qr_pairing_result(identity: str, request: Request):
+    poll_key = request.headers.get("X-Pairing-Poll-Key", "")
+    try:
+        return qr_pairing.result(identity, poll_key)
+    except PairingError as error:
+        raise HTTPException(status_code=error.status, detail=str(error)) from None
+
+
+@app.get("/api/pairing/requests")
+async def list_qr_pairing_requests(request: Request):
+    require_local_owner(request)
+    return {"requests": qr_pairing.pending()}
+
+
+@app.post("/api/pairing/requests/{identity}/approve")
+async def approve_qr_pairing_request(identity: str, body: QRPairDecision, request: Request):
+    require_local_owner(request)
+    if request.headers.get("content-type", "").split(";")[0] != "application/json":
+        raise HTTPException(status_code=403, detail="JSON request required")
+    try:
+        return qr_pairing.decide(identity, body.code, True, session_client_info)
+    except PairingError as error:
+        raise HTTPException(status_code=error.status, detail=str(error)) from None
+
+
+@app.post("/api/pairing/requests/{identity}/reject")
+async def reject_qr_pairing_request(identity: str, request: Request):
+    require_local_owner(request)
+    if request.headers.get("content-type", "").split(";")[0] != "application/json":
+        raise HTTPException(status_code=403, detail="JSON request required")
+    try:
+        return qr_pairing.decide(identity, "", False, session_client_info)
+    except PairingError as error:
+        raise HTTPException(status_code=error.status, detail=str(error)) from None
+
+
 async def require_transfer_session(request: Request) -> str:
     """Require an existing session for every sender, including loopback clients."""
     scheme, _, token = request.headers.get("Authorization", "").partition(" ")
@@ -453,7 +534,7 @@ async def gate_transfer_body(request: Request, call_next):
     response = await call_next(request)
     if request.url.path.startswith(("/api/incoming-offers", "/api/outgoing-offers", "/api/recipient-sessions", "/api/relays", "/api/relay-recipients")):
         response.headers["Cache-Control"] = "no-store"
-    if request.url.path in {"/api/status", "/api/history", "/api/pairing-code", "/api/regenerate-pairing-code"} or request.url.path.startswith("/api/transfer-requests"):
+    if request.url.path in {"/api/status", "/api/history", "/api/pairing-code", "/api/regenerate-pairing-code"} or request.url.path.startswith(("/api/transfer-requests", "/api/pairing")):
         response.headers["Cache-Control"] = "no-store"
     return response
 
