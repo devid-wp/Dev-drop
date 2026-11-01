@@ -21,6 +21,7 @@ from app.config import DevDropConfig, config_path, load_config, save_config
 from app.discovery import DiscoveryService
 from app.runtime import HOST, create_session_folder, get_local_ip
 from app.transport import TLSSettings, TransportError, open_local
+from app.tls_setup import tls_for_server
 
 
 VERSION = "2.0.0"
@@ -233,8 +234,14 @@ def command_serve(args: argparse.Namespace) -> int:
     port = args.port if args.port is not None else config.port
     root = Path(args.session_root).expanduser() if args.session_root else config.session_root
     try:
-        tls = TLSSettings.load()
-        password = getpass.getpass("TLS private-key password: ")
+        tls, password = tls_for_server(
+            consent=lambda: input("HTTPS is not configured. Create a local HTTPS identity now? [y/N]: ").strip().lower() in {"y", "yes"},
+            password_prompt=lambda confirm: getpass.getpass(
+                "Choose TLS private-key password: " if not confirm else "Repeat TLS private-key password: "
+            ),
+        )
+        if password is None:
+            password = getpass.getpass("TLS private-key password: ")
         tls_options = tls.server_options(password)
         session_dir = create_session_folder(root)
     except (TransportError, OSError, EOFError) as error:

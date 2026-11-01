@@ -2,10 +2,13 @@
 
 Dev-Drop now requires HTTPS everywhere, including desktop loopback traffic.
 There is no HTTP listener, redirect bootstrap, certificate-warning exception,
-automatic CA installation, or trust-on-first-use from the network. Missing TLS
-configuration refuses startup. Launch through `devdrop.py` or `devdrop_gui.py`;
-starting `uvicorn app.main:app` without TLS only returns HTTP 426, never the app.
-Keep proxy headers disabled; a reverse proxy is outside this stage's trust model.
+automatic CA installation, or trust-on-first-use from the network. On first
+server startup, missing TLS configuration can be prepared only after explicit
+local consent; declining or invalid configuration refuses startup. Start via
+`devdrop serve`, `devdrop.py`, or the desktop GUI. `devdrop tui` manages an
+already-running server. Starting `uvicorn app.main:app` without TLS only returns
+HTTP 426, never the app. Keep proxy headers disabled; a reverse proxy is outside
+this stage's trust model.
 
 ## Choice of transport
 
@@ -23,12 +26,21 @@ Sources: [Web Crypto secure contexts](https://developer.mozilla.org/en-US/docs/W
 
 ## Provision certificates before starting
 
-Use an existing trusted certificate issuer or a dedicated private CA managed
-outside Dev-Drop. The application does not generate or keep a CA private key.
-Certificate issuance tools are an administrator prerequisite, not a new runtime
-Python dependency. The server private key must be encrypted PKCS#8 PEM, with a
-strong unique password. The password is requested at startup (masked in the GUI)
-and is retained in process memory for TLS use, never written to configuration.
+For managed deployments, use an existing trusted issuer or a dedicated private
+CA managed outside Dev-Drop. On a local first run, `devdrop serve` offers to
+create a dedicated local CA and loopback server identity after explicit consent.
+It reuses existing CA/certificate files when present. The local CA private key
+is encrypted and stored owner-only under `~/.config/DevDrop/ca`; protect it, or
+use an externally managed offline CA when stronger separation is needed. The
+server key is encrypted PKCS#8 PEM; its password is requested at setup and at
+each server start, masked, and kept in process memory, never in configuration
+or logs. The desktop GUI uses masked dialogs.
+
+First-run setup needs OpenSSL. It writes `tls.json` at
+`~/.config/DevDrop/tls.json`, with server files in `tls/` and the CA in `ca/`.
+An earlier script put `tls.json` inside `tls/`; the application migrates that
+config without replacing the CA, key, or certificate. A damaged config is
+diagnosed and never silently replaced.
 
 For example, on a trusted/offline machine using OpenSSL (commands prompt for key
 passwords; do not put production passwords in command arguments):

@@ -57,6 +57,7 @@ from PySide6.QtWidgets import (
 from app.config import DevDropConfig, load_config, save_config
 from app.runtime import HOST, create_session_folder, get_local_ip, ensure_firewall_rule, get_network_profile
 from app.transport import TLSSettings, TransportError, open_local
+from app.tls_setup import tls_for_server
 import app.main as backend
 
 
@@ -232,10 +233,26 @@ class BackendManager:
                 f"Port {self.config.port} is already in use by another application."
             )
 
-        tls = TLSSettings.load()
-        password, accepted = QInputDialog.getText(None, "DevDrop HTTPS", "TLS private-key password:", QLineEdit.EchoMode.Password)
-        if not accepted:
-            raise TransportError("HTTPS startup cancelled")
+        def confirm_setup() -> bool:
+            return QMessageBox.question(
+                None, "Set up HTTPS",
+                "DevDrop needs HTTPS before it can start. Create a local certificate authority and server certificate now?",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                QMessageBox.StandardButton.No,
+            ) == QMessageBox.StandardButton.Yes
+
+        def password_prompt(confirm: bool) -> str:
+            label = "Repeat TLS private-key password:" if confirm else "Choose TLS private-key password:"
+            value, accepted = QInputDialog.getText(None, "DevDrop HTTPS", label, QLineEdit.EchoMode.Password)
+            if not accepted:
+                return ""
+            return value
+
+        tls, password = tls_for_server(confirm_setup, password_prompt)
+        if password is None:
+            password = password_prompt(False)
+            if not password:
+                raise TransportError("HTTPS startup cancelled")
         tls_options = tls.server_options(password)
         # Ensure Windows Firewall allows LAN access (auto-elevates to admin)
         ok, msg = ensure_firewall_rule(self.config.port)

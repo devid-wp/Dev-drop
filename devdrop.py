@@ -1,5 +1,6 @@
 from getpass import getpass
 from app.transport import TLSSettings, TransportError
+from app.tls_setup import tls_for_server
 import shutil
 import sys
 import subprocess
@@ -66,8 +67,15 @@ def main() -> None:
         sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 
     try:
-        tls = TLSSettings.load()
-        tls_options = tls.server_options(getpass("TLS private-key password: "))
+        tls, password = tls_for_server(
+            consent=lambda: input("HTTPS is not configured. Create a local HTTPS identity now? [y/N]: ").strip().lower() in {"y", "yes"},
+            password_prompt=lambda confirm: getpass(
+                "Choose TLS private-key password: " if not confirm else "Repeat TLS private-key password: "
+            ),
+        )
+        if password is None:
+            password = getpass("TLS private-key password: ")
+        tls_options = tls.server_options(password)
     except (TransportError, EOFError) as error:
         print(f"HTTPS startup refused: {error}")
         return

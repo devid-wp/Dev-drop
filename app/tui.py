@@ -131,8 +131,8 @@ class TuiServices:
                 "fingerprint": tls.fingerprint,
                 "ca_fingerprint": certificate_fingerprint(tls.ca),
             }
-        except (TransportError, OSError):
-            snapshot.security = {"https": False}
+        except (TransportError, OSError) as error:
+            snapshot.security = {"https": False, "error": str(error)}
         return snapshot
 
     def decide(self, identity: str, approve: bool) -> dict[str, Any]:
@@ -597,7 +597,7 @@ class DevDropTui(App[None]):
                          f"Server certificate SHA-256: {security.get('fingerprint', 'unknown')}\n"
                          f"CA certificate SHA-256: {security.get('ca_fingerprint', 'unknown')}")
         else:
-            tls_state = "HTTPS: Not configured or certificate validation failed. HTTP fallback is disabled."
+            tls_state = f"HTTPS unavailable: {_safe(security.get('error', 'TLS configuration is unavailable.'), 300)}\nHTTP fallback is disabled."
         if pairing:
             code = str(pairing.get("code", ""))
             formatted = f"{code[:3]} {code[3:6]} {code[6:]}" if len(code) == 9 else "Unavailable"

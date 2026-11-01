@@ -23,14 +23,19 @@ No accounts. No cloud. Just your devices.
 
 ## How it works
 
-First complete the [required HTTPS and phone trust setup](docs/TRANSPORT.md).
-Install the command entry point, then start the server (the encrypted TLS key
-password is requested):
+Install the command entry point, then start the server:
 
 ```bash
 pip install -e .
 devdrop serve
 ```
+
+On first launch, `devdrop serve` offers to create a local HTTPS identity. It
+reuses existing local CA/certificate files, asks for a password for the
+encrypted key, and never enables HTTP. The generated loopback identity is for
+testing on this PC; Android/LAN use needs a certificate with the computer's
+network address in its SAN and trusted CA setup. See
+[HTTPS and certificate trust](docs/TRANSPORT.md).
 
 DevDrop will display something like:
 
@@ -68,6 +73,9 @@ certificate warning:
 ```text
 https://127.0.0.1:8765/panel
 ```
+
+Start the HTTPS server and panel with `./run-panel.sh`; it uses the same
+first-run TLS flow as `devdrop serve`.
 
 The panel is served by the existing FastAPI process and is restricted to direct
 loopback requests with a loopback Host. It shows paired sessions, discovered
@@ -161,6 +169,10 @@ coverage and architecture are described in [CLI architecture](docs/CLI_ARCHITECT
 transfers always open an explicit review dialog before an approval decision.
 The Transfers screen also shows PC-to-phone offers with server-reported bytes
 sent; the backend does not expose incoming phone-upload progress.
+Start the server first with `devdrop serve`; on a fresh install that command
+offers the same HTTPS setup used by the legacy launcher and desktop GUI.
+`devdrop tui` manages a running server and displays a specific TLS/configuration
+error when it cannot connect.
 
 ## Session folders
 
