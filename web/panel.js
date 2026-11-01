@@ -237,9 +237,9 @@ function renderPairing(){
   const result=data.pairingQr, image=byId("pairing-qr"), emptyState=byId("pairing-qr-empty");
   if(!result){byId("pairing-state").textContent=data.failures.pairingQr||"Secure pairing unavailable.";image.classList.remove("visible");emptyState.classList.remove("hidden");emptyState.textContent="QR unavailable";}
   else if(result.state==="waiting_for_owner"){
-    byId("pairing-state").textContent="A phone is waiting for owner approval.";byId("pairing-expiry").textContent=`Request expires in ${result.expires_in} seconds.`;image.classList.remove("visible");emptyState.classList.remove("hidden");emptyState.textContent="Approve the phone below";
+    const connected=onlyNumber(data.status?.connected_devices);byId("pairing-state").textContent=connected?`Connecting · approval pending · ${connected} already connected`:"Connecting · approve the phone below";byId("pairing-expiry").textContent=`Request expires in ${result.expires_in} seconds.`;image.classList.remove("visible");emptyState.classList.remove("hidden");emptyState.textContent="Approve the phone below";
   } else {
-    byId("pairing-state").textContent="Ready to scan";byId("pairing-expiry").textContent=`One use · expires in ${result.expires_in} seconds`;
+    const connected=onlyNumber(data.status?.connected_devices);byId("pairing-state").textContent=connected?`Connected · ${connected} device${connected===1?"":"s"} · ready for another phone`:"Ready to scan";byId("pairing-expiry").textContent=`One use · expires in ${result.expires_in} seconds`;
     if(result.qr_svg){image.src=`data:image/svg+xml;charset=utf-8,${encodeURIComponent(result.qr_svg)}`;image.classList.add("visible");emptyState.classList.add("hidden");}
   }
   const target=byId("pairing-requests");target.replaceChildren();
