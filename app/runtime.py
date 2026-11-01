@@ -1,4 +1,5 @@
 import os
+import ipaddress
 import socket
 import subprocess
 import tempfile
@@ -43,6 +44,33 @@ def get_local_ip() -> str:
         return "127.0.0.1"
     finally:
         sock.close()
+
+
+def get_local_addresses() -> list[str]:
+    """Return unique non-loopback local IPs suitable for TLS SANs."""
+    candidates: set[str] = set()
+    try:
+        for item in socket.getaddrinfo(socket.gethostname(), None, type=socket.SOCK_STREAM):
+            candidates.add(item[4][0].split("%", 1)[0])
+    except OSError:
+        pass
+    try:
+        preferred = get_local_ip()
+    except OSError:
+        preferred = "127.0.0.1"
+    if preferred:
+        candidates.add(preferred)
+    filtered = []
+    for candidate in candidates:
+        try:
+            address = ipaddress.ip_address(candidate)
+        except ValueError:
+            continue
+        if (address.is_loopback or address.is_link_local or address.is_unspecified
+                or address.is_multicast or not address.is_private):
+            continue
+        filtered.append(str(address))
+    return sorted(set(filtered), key=lambda value: (ipaddress.ip_address(value).version, value))
 
 
 def get_network_profile() -> str:

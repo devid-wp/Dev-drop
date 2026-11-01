@@ -248,8 +248,24 @@ class BackendManager:
                 return ""
             return value
 
-        tls, password = tls_for_server(confirm_setup, password_prompt)
-        if password is None:
+        def advanced_setup() -> bool:
+            return QMessageBox.question(
+                None, "Advanced HTTPS security",
+                "Require a password to unlock the TLS key every time DevDrop starts?",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                QMessageBox.StandardButton.No,
+            ) == QMessageBox.StandardButton.Yes
+
+        def migrate_to_os_storage() -> bool:
+            return QMessageBox.question(
+                None, "Passwordless TLS key storage",
+                "Keep this server identity and CA, but store their keys as owner-only OS files so startup no longer asks for a password? The encrypted originals will be retained.",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                QMessageBox.StandardButton.No,
+            ) == QMessageBox.StandardButton.Yes
+
+        tls, password = tls_for_server(confirm_setup, password_prompt, advanced_setup, migrate_to_os_storage)
+        if password is None and tls.key_mode == "password":
             password = password_prompt(False)
             if not password:
                 raise TransportError("HTTPS startup cancelled")

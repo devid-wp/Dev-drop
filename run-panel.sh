@@ -11,7 +11,7 @@ if [ ! -x "$PYTHON" ]; then
     python3 -m venv "$ROOT/.venv"
 fi
 
-if ! "$PYTHON" -c 'import fastapi, uvicorn, textual' >/dev/null 2>&1; then
+if ! "$PYTHON" -c 'import cryptography, fastapi, uvicorn, textual' >/dev/null 2>&1; then
     "$PIP" install -e .
 fi
 

@@ -29,18 +29,26 @@ Sources: [Web Crypto secure contexts](https://developer.mozilla.org/en-US/docs/W
 For managed deployments, use an existing trusted issuer or a dedicated private
 CA managed outside Dev-Drop. On a local first run, `devdrop serve` offers to
 create a dedicated local CA and loopback server identity after explicit consent.
-It reuses existing CA/certificate files when present. The local CA private key
-is encrypted and stored owner-only under `~/.config/DevDrop/ca`; protect it, or
-use an externally managed offline CA when stronger separation is needed. The
-server key is encrypted PKCS#8 PEM; its password is requested at setup and at
-each server start, masked, and kept in process memory, never in configuration
-or logs. The desktop GUI uses masked dialogs.
+It reuses existing CA/certificate files when present. By default, private keys
+are PKCS#8 files protected by owner-only OS permissions (POSIX mode `0600`;
+Windows owner and SYSTEM ACL). This protects against other local accounts, not
+malware running as the same user. **Advanced Security Mode** encrypts the keys
+with a user passphrase and asks for it at each start. Passwords stay in process
+memory and are never stored in configuration or logs.
 
-First-run setup needs OpenSSL. It writes `tls.json` at
+First-run setup uses the Python `cryptography` package, not an OpenSSL command
+line tool. It writes `tls.json` at
 `~/.config/DevDrop/tls.json`, with server files in `tls/` and the CA in `ca/`.
 An earlier script put `tls.json` inside `tls/`; the application migrates that
 config without replacing the CA, key, or certificate. A damaged config is
 diagnosed and never silently replaced.
+
+The automatic certificate contains loopback, `localhost`, the computer
+hostname and current LAN IP addresses in its SAN. If a managed computer's LAN
+address changes, DevDrop issues a new leaf certificate under the same CA and
+retains the old certificate file; the CA trust anchor does not change. When
+upgrading an earlier encrypted local identity, DevDrop can move the same keys to
+owner-only OS storage after explicit consent, retaining encrypted originals.
 
 For example, on a trusted/offline machine using OpenSSL (commands prompt for key
 passwords; do not put production passwords in command arguments):

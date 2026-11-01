@@ -31,10 +31,12 @@ devdrop serve
 ```
 
 On first launch, `devdrop serve` offers to create a local HTTPS identity. It
-reuses existing local CA/certificate files, asks for a password for the
-encrypted key, and never enables HTTP. The generated loopback identity is for
-testing on this PC; Android/LAN use needs a certificate with the computer's
-network address in its SAN and trusted CA setup. See
+reuses existing local CA/certificate files, protects keys with owner-only OS
+permissions, and never enables HTTP. Optional Advanced Security Mode encrypts
+keys with a password. Existing encrypted local keys can be migrated to OS-only
+storage after consent; the encrypted originals are retained. The generated
+identity includes current LAN addresses. Android and browsers still require
+explicit CA trust. See
 [HTTPS and certificate trust](docs/TRANSPORT.md).
 
 DevDrop will display something like:

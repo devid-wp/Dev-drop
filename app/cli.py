@@ -239,8 +239,10 @@ def command_serve(args: argparse.Namespace) -> int:
             password_prompt=lambda confirm: getpass.getpass(
                 "Choose TLS private-key password: " if not confirm else "Repeat TLS private-key password: "
             ),
+            advanced_prompt=lambda: input("Use Advanced Security Mode (ask for key password at every start)? [y/N]: ").strip().lower() in {"y", "yes"},
+            passwordless_migration_prompt=lambda: input("Switch existing encrypted local keys to passwordless owner-only OS storage? [y/N]: ").strip().lower() in {"y", "yes"},
         )
-        if password is None:
+        if password is None and tls.key_mode == "password":
             password = getpass.getpass("TLS private-key password: ")
         tls_options = tls.server_options(password)
         session_dir = create_session_folder(root)

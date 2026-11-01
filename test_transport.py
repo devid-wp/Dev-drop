@@ -107,6 +107,8 @@ class TransportTests(unittest.TestCase):
     def test_unencrypted_private_key_is_refused(self):
         key = self.root / "plain-key.pem"
         key.write_text("-----BEGIN PRIVATE KEY-----\nnot-used\n-----END PRIVATE KEY-----")
+        if os.name != "nt":
+            key.chmod(0o600)
         with self.assertRaisesRegex(TransportError, "encrypted PKCS#8"):
             replace(TLSSettings.load(), key=key).server_options(PASSWORD)
 

@@ -70,6 +70,10 @@ class TLSSettings:
     ca: Path
     host: str
     fingerprint: str
+    key_mode: str = "password"
+    managed: bool = False
+    ca_key: Path | None = None
+    legacy_key_storage: bool = False
 
     @classmethod
     def load(cls):
@@ -86,8 +90,17 @@ class TLSSettings:
             missing = [name for name in ("certificate", "key", "ca", "host", "sha256") if name not in data]
             if missing:
                 raise ValueError(f"missing fields: {', '.join(missing)}")
-            settings = cls(*(Path(data[name]).expanduser().resolve() for name in ("certificate", "key", "ca")),
-                           host=data["host"], fingerprint=data["sha256"].lower())
+            certificate, key, ca = (Path(data[name]).expanduser().resolve() for name in ("certificate", "key", "ca"))
+            ca_key = Path(data["ca_key"]).expanduser().resolve() if data.get("ca_key") else None
+            key_mode = data.get("key_mode", "password")
+            if key_mode not in {"os", "password"}:
+                raise ValueError("key_mode must be 'os' or 'password'")
+            local_root = config_dir().resolve()
+            managed_paths = key.is_relative_to(local_root / "tls") and ca.is_relative_to(local_root / "ca")
+            settings = cls(certificate, key, ca, host=data["host"],
+                           fingerprint=data["sha256"].lower(), key_mode=key_mode,
+                           managed=bool(data.get("managed", managed_paths)), ca_key=ca_key,
+                           legacy_key_storage="security_mode" not in data)
             for name, file_path in (("certificate", settings.certificate), ("key", settings.key), ("CA certificate", settings.ca)):
                 if not file_path.is_file():
                     raise ValueError(f"{name} file does not exist: {file_path}")
@@ -123,22 +136,31 @@ class TLSSettings:
 
     def server_options(self, password):
         try:
-            if not password or "-----BEGIN ENCRYPTED PRIVATE KEY-----" not in self.key.read_text(encoding="ascii"):
-                raise TransportError("An encrypted PKCS#8 private key and a nonempty password are required")
+            pem = self.key.read_text(encoding="ascii")
             if os.name != "nt" and self.key.stat().st_mode & 0o077:
-                raise TransportError("TLS private key must be owner-only (chmod 600)")
+                raise TransportError("TLS private key must be owner-only and accessible only by the current user (chmod 600).")
+            if os.name == "nt":
+                from app.secure_storage import protect_private_file
+                protect_private_file(self.key)
+            if self.key_mode == "password":
+                if not password or "-----BEGIN ENCRYPTED PRIVATE KEY-----" not in pem:
+                    raise TransportError("Advanced Security Mode requires an encrypted PKCS#8 key and its password.")
+            else:
+                if password or "-----BEGIN PRIVATE KEY-----" not in pem:
+                    raise TransportError("OS-protected TLS key must be an unencrypted PKCS#8 key with owner-only access.")
             context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
             context.minimum_version = ssl.TLSVersion.TLSv1_2
             context.set_ciphers("ECDHE+AESGCM:ECDHE+CHACHA20")
             try:
-                context.load_cert_chain(self.certificate, self.key, password)
+                context.load_cert_chain(self.certificate, self.key, password if self.key_mode == "password" else None)
             except ssl.SSLError:
                 raise TransportError("Cannot unlock TLS private key: the password is incorrect or the key file is damaged. Check the password and encrypted PKCS#8 key.") from None
             # Check expiry, chain, SANs and pin without opening any network port.
             for host in {self.host, "127.0.0.1"}:
                 verify_in_memory(context, self.client_context(), host, self.fingerprint)
             return {"ssl_certfile": str(self.certificate), "ssl_keyfile": str(self.key),
-                    "ssl_keyfile_password": password, "ssl_version": ssl.PROTOCOL_TLS_SERVER,
+                    "ssl_keyfile_password": password if self.key_mode == "password" else None,
+                    "ssl_version": ssl.PROTOCOL_TLS_SERVER,
                     "ssl_ciphers": "ECDHE+AESGCM:ECDHE+CHACHA20"}
         except TransportError:
             raise
