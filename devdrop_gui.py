@@ -49,6 +49,7 @@ from PySide6.QtWidgets import (
     QSizePolicy,
     QSpinBox,
     QListWidget,
+    QListWidgetItem,
     QProgressBar,
     QVBoxLayout,
     QWidget,
@@ -150,6 +151,17 @@ class BackendClient:
     def regenerate_code(self) -> dict[str, Any]:
         return self._request("POST", "/api/regenerate-pairing-code")
 
+    def pairing_qr(self) -> dict[str, Any]:
+        return self._request("GET", "/api/pairing/qr")
+
+    def pairing_requests(self) -> dict[str, Any]:
+        return self._request("GET", "/api/pairing/requests")
+
+    def decide_pairing(self, identity: str, approve: bool, code: str = "") -> dict[str, Any]:
+        action = "approve" if approve else "reject"
+        return self._request("POST", f"/api/pairing/requests/{identity}/{action}",
+                             {"code": code} if approve else {})
+
     def health(self) -> dict[str, Any]:
         return self._request("GET", "/api/health")
 
@@ -208,8 +220,10 @@ class BackendClient:
             time.sleep(0.5)
         raise ValueError("Approval expired")
 
-    def _request(self, method: str, path: str) -> dict[str, Any]:
-        request = urllib.request.Request(f"{self.base_url}{path}", method=method)
+    def _request(self, method: str, path: str, payload: dict[str, Any] | None = None) -> dict[str, Any]:
+        request = urllib.request.Request(f"{self.base_url}{path}", method=method,
+            data=json.dumps(payload).encode("utf-8") if payload is not None else None,
+            headers={"Content-Type": "application/json"} if payload is not None else {})
         with open_local(request, timeout=REQUEST_TIMEOUT_SECONDS) as response:
             payload = response.read().decode("utf-8")
             return json.loads(payload)
@@ -689,6 +703,16 @@ class MainWindow(QMainWindow):
 
         self.address_value = QLabel("-")
         self.code_value = QLabel("-")
+        self.pairing_status_value = QLabel("Waiting for phone")
+        self.pairing_list = QListWidget()
+        self.pairing_list.setMaximumHeight(120)
+        self.approve_pairing_button = QPushButton("Approve phone…")
+        self.reject_pairing_button = QPushButton("Reject phone")
+        self.approve_pairing_button.setEnabled(False)
+        self.reject_pairing_button.setEnabled(False)
+        self.pairing_list.currentRowChanged.connect(self._pairing_selection_changed)
+        self.approve_pairing_button.clicked.connect(self.approve_pairing)
+        self.reject_pairing_button.clicked.connect(self.reject_pairing)
         self.status_value = QLabel("Starting backend...")
         self.status_dot = StatusDot(QColor("#73737d"), self)
         self.session_value = QLabel("-")
@@ -737,12 +761,12 @@ class MainWindow(QMainWindow):
         self.clear_history_button = QPushButton("Clear history")
         self.clear_history_button.clicked.connect(self.clear_history)
 
-        self.regenerate_button = QPushButton("Regenerate code")
+        self.regenerate_button = QPushButton("Refresh QR")
         self.open_folder_button = QPushButton("Open session folder")
         self.settings_button = QPushButton("Settings")
         self.copy_address_button = QPushButton("Copy")
         self.drop_area = FileDropArea(self)
-        self.regenerate_button.clicked.connect(self.regenerate_code)
+        self.regenerate_button.clicked.connect(self.refresh_status)
         self.open_folder_button.clicked.connect(self.open_session_folder)
         self.settings_button.clicked.connect(self.open_settings)
         self.copy_address_button.clicked.connect(self.copy_lan_address)
@@ -845,6 +869,13 @@ class MainWindow(QMainWindow):
         approval_actions.addWidget(self.approve_button)
         approval_actions.addWidget(self.reject_button)
         pending.addLayout(approval_actions)
+        pairing = self._section("Phone connection requests")
+        pairing.addWidget(self.pairing_status_value)
+        pairing.addWidget(self.pairing_list)
+        pairing_actions = QHBoxLayout()
+        pairing_actions.addWidget(self.approve_pairing_button)
+        pairing_actions.addWidget(self.reject_pairing_button)
+        pairing.addLayout(pairing_actions)
         outgoing = self._section("Send to browser — select the session shown on the phone")
         outgoing.addWidget(self.recipient_box)
         outgoing.addWidget(self.offer_button)
@@ -853,6 +884,7 @@ class MainWindow(QMainWindow):
         outgoing.addWidget(self.outgoing_status)
         layout.addLayout(outgoing)
         layout.addLayout(pending)
+        layout.addLayout(pairing)
         layout.addLayout(transfer)
         layout.addWidget(self._line())
         layout.addLayout(session)
@@ -1098,7 +1130,13 @@ class MainWindow(QMainWindow):
         except TransportError as error:
             self._set_unavailable(str(error))
             return
-        self._update_qr_code(lan_address)
+        try:
+            pairing = self.client.pairing_qr()
+            self._update_pairing_qr(pairing)
+            self._refresh_pairing_requests()
+        except (TransportError, OSError, urllib.error.URLError, TimeoutError, json.JSONDecodeError) as error:
+            self.pairing_status_value.setText(f"Secure pairing unavailable: {error}")
+            self._clear_pairing_qr()
 
         # Network profile (Public/Private/Domain) - important for LAN visibility
         net_profile = get_network_profile()
@@ -1130,7 +1168,7 @@ class MainWindow(QMainWindow):
         session_path = Path(str(data.get("session_path") or ""))
         self.current_session_path = session_path if str(session_path) else None
 
-        pairing_code = format_code(str(data.get("pairing_code") or ""))
+        pairing_code = pairing.get("state", "unavailable") if "pairing" in locals() else "unavailable"
         session_text = str(session_path) if str(session_path) else "-"
         files_text = str(data.get("received_files", 0))
         size_text = format_bytes(int(data.get("received_size") or 0))
@@ -1148,7 +1186,7 @@ class MainWindow(QMainWindow):
 
         self._last_status_snapshot = snapshot
         self.address_value.setText(lan_address)
-        self.code_value.setText(pairing_code)
+        self.code_value.setText("Ready · scan QR" if pairing_code == "ready" else "Waiting for phone approval" if pairing_code == "waiting_for_owner" else "QR pairing unavailable")
         self.status_value.setText(status_text)
         self.status_dot.set_color(QColor("#22c55e" if connected_devices > 0 else "#ef4444"))
         self.session_value.setText(session_text)
@@ -1168,6 +1206,88 @@ class MainWindow(QMainWindow):
 
         self.code_value.setText(format_code(str(data.get("code") or "")))
         self.refresh_status()
+
+    def _update_pairing_qr(self, payload: dict[str, Any]) -> None:
+        if payload.get("state") != "ready":
+            self._clear_pairing_qr()
+            self.pairing_status_value.setText("A phone is waiting. Check its short code and approve below." if payload.get("state") == "waiting_for_owner" else "Pairing QR is unavailable.")
+            return
+        keys = ("version", "url", "state", "attempt_id", "token", "expires_in", "ca_certificate_der", "ca_sha256", "server_certificate_sha256")
+        encoded = json.dumps({key: payload[key] for key in keys}, separators=(",", ":"))
+        identity = payload.get("attempt_id")
+        if identity == self._qr_payload:
+            self.pairing_status_value.setText(f"Ready to scan · expires in {payload.get('expires_in', 0)} seconds")
+            return
+        self._qr_payload = identity
+        self.qr_address_value.setText(str(payload.get("url", "")))
+        try:
+            import qrcode
+            qr = qrcode.QRCode(box_size=8, border=4, error_correction=qrcode.constants.ERROR_CORRECT_L)
+            qr.add_data(encoded)
+            qr.make(fit=True)
+            buffer = BytesIO()
+            qr.make_image(fill_color="black", back_color="white").save(buffer, format="PNG")
+            pixmap = QPixmap()
+            if not pixmap.loadFromData(buffer.getvalue(), "PNG"):
+                raise ValueError("Could not load generated QR image")
+            self.qr_code_value.setPixmap(pixmap.scaled(self.qr_code_value.size(), Qt.AspectRatioMode.KeepAspectRatio,
+                                                       Qt.TransformationMode.FastTransformation))
+            self.pairing_status_value.setText(f"Ready to scan · expires in {payload.get('expires_in', 0)} seconds")
+        except Exception:
+            self._clear_pairing_qr()
+
+    def _clear_pairing_qr(self) -> None:
+        self.qr_code_value.clear()
+        self.qr_code_value.setText("Waiting for phone")
+        self.qr_address_value.setText("")
+        self._qr_payload = None
+
+    def _refresh_pairing_requests(self) -> None:
+        response = self.client.pairing_requests()
+        selected = self.pairing_list.currentItem()
+        identity = selected.data(Qt.ItemDataRole.UserRole) if selected else None
+        self.pairing_list.clear()
+        for request in response.get("requests", []):
+            row = QListWidgetItem(f"{request.get('device', 'Android phone')} · {request.get('peer', 'Unknown address')} · {request.get('expires_in', 0)}s")
+            row.setData(Qt.ItemDataRole.UserRole, request.get("attempt_id"))
+            self.pairing_list.addItem(row)
+            if row.data(Qt.ItemDataRole.UserRole) == identity:
+                self.pairing_list.setCurrentItem(row)
+        self.pairing_status_value.setText("No phone is waiting to connect." if self.pairing_list.count() == 0 else "Select a phone and compare its code before approval.")
+
+    def _pairing_selection_changed(self, _row: int) -> None:
+        selected = self.pairing_list.currentItem() is not None
+        self.approve_pairing_button.setEnabled(selected)
+        self.reject_pairing_button.setEnabled(selected)
+
+    def approve_pairing(self) -> None:
+        item = self.pairing_list.currentItem()
+        if item is None:
+            return
+        code, accepted = QInputDialog.getText(self, "Confirm phone", f"Enter the six digit code shown on {item.text().split(' · ')[0]}.")
+        if not accepted:
+            return
+        if not code.isdigit() or len(code) != 6:
+            QMessageBox.warning(self, "Confirm phone", "Enter the six digit code shown on the phone.")
+            return
+        identity = item.data(Qt.ItemDataRole.UserRole)
+        try:
+            self.client.decide_pairing(identity, True, code)
+            self.refresh_status()
+        except (TransportError, OSError, urllib.error.URLError, TimeoutError, json.JSONDecodeError) as error:
+            QMessageBox.warning(self, "Phone pairing", str(error))
+
+    def reject_pairing(self) -> None:
+        item = self.pairing_list.currentItem()
+        if item is None:
+            return
+        if QMessageBox.question(self, "Reject phone", f"Reject connection request from {item.text()}?") != QMessageBox.StandardButton.Yes:
+            return
+        try:
+            self.client.decide_pairing(item.data(Qt.ItemDataRole.UserRole), False)
+            self.refresh_status()
+        except (TransportError, OSError, urllib.error.URLError, TimeoutError, json.JSONDecodeError) as error:
+            QMessageBox.warning(self, "Phone pairing", str(error))
         self._show_toast("Pairing code regenerated")
 
     def refresh_history(self) -> None:

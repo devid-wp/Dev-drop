@@ -101,15 +101,30 @@ def command_status(args: argparse.Namespace) -> int:
 
 
 def command_pair(args: argparse.Namespace) -> int:
-    data = _api("GET", "/api/pairing-code")
-    code = str(data.get("code", ""))
-    if len(code) != 9 or not code.isdigit():
-        raise CliError("The local server returned an invalid pairing code.", EXIT_UNAVAILABLE)
+    data = _api("GET", "/api/pairing/qr")
+    if data.get("state") == "waiting_for_owner":
+        if args.json:
+            _emit({"state": "waiting_for_owner", "expires_in": data.get("expires_in", 0)}, True)
+        else:
+            print(f"A phone is waiting for approval ({data.get('expires_in', 0)} seconds remaining).")
+            print("Approve it in the local Web Panel, TUI, or desktop GUI.")
+        return EXIT_OK
+    keys = ("version", "url", "state", "attempt_id", "token", "expires_in",
+            "ca_certificate_der", "ca_sha256", "server_certificate_sha256")
+    try:
+        payload = {key: data[key] for key in keys}
+    except KeyError:
+        raise CliError("The server did not return a valid secure pairing QR.", EXIT_UNAVAILABLE) from None
     if args.json:
-        _emit({"code": code, "expires_in": data.get("expires_in")}, True)
+        _emit({"state": "ready", "payload": payload}, True)
     else:
-        print(f"Pairing code: {code[:3]} {code[3:6]} {code[6:]}")
-        print(f"Expires in: {data.get('expires_in', 0)} seconds")
+        import qrcode
+        qr = qrcode.QRCode(error_correction=qrcode.constants.ERROR_CORRECT_L, border=2)
+        qr.add_data(json.dumps(payload, separators=(",", ":")))
+        qr.make(fit=True)
+        qr.print_ascii(invert=True)
+        print(f"Scan this QR in Dev-Drop Android · {payload['url']} · expires in {payload['expires_in']} seconds")
+        print("Then compare the phone's short code and approve it in the local Web Panel, TUI, or desktop GUI.")
     return EXIT_OK
 
 
@@ -292,8 +307,8 @@ def build_parser() -> argparse.ArgumentParser:
     sub.add_argument("--json", action="store_true", help="Print JSON")
     sub.set_defaults(handler=command_devices)
 
-    sub = subparsers.add_parser("pair", help="Show this computer's pairing code for a phone or browser")
-    sub.add_argument("--json", action="store_true", help="Print pairing code as JSON")
+    sub = subparsers.add_parser("pair", help="Show a one use QR for securely pairing a phone")
+    sub.add_argument("--json", action="store_true", help="Print the one use QR payload as JSON")
     sub.set_defaults(handler=command_pair)
 
     sub = subparsers.add_parser("transfers", help="List or decide pending owner approval requests")

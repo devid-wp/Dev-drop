@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import threading
+import json
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable
@@ -13,6 +14,7 @@ from textual.containers import Grid, Horizontal, Vertical, VerticalScroll
 from textual.message import Message
 from textual.screen import ModalScreen
 from textual.widgets import Button, DataTable, Footer, Header, Input, Static
+import qrcode
 
 from app.cli import CliError, _api
 from app.config import DevDropConfig, load_config, save_config
@@ -47,6 +49,7 @@ class TuiSnapshot:
     outgoing_offers: list[dict[str, Any]] = field(default_factory=list)
     history: list[dict[str, Any]] = field(default_factory=list)
     pairing: dict[str, Any] | None = None
+    pairing_requests: list[dict[str, Any]] = field(default_factory=list)
     security: dict[str, Any] | None = None
     config: DevDropConfig = field(default_factory=load_config)
     errors: dict[str, str] = field(default_factory=dict)
@@ -121,7 +124,10 @@ class TuiServices:
             snapshot.history = list(history.get("transfers", []))
         if cancelled():
             return snapshot
-        snapshot.pairing = request("pairing", "/api/pairing-code")
+        snapshot.pairing = request("pairing", "/api/pairing/qr")
+        pairing_requests = request("pairing_requests", "/api/pairing/requests")
+        if pairing_requests is not None:
+            snapshot.pairing_requests = list(pairing_requests.get("requests", []))
         try:
             tls = TLSSettings.load()
             snapshot.security = {
@@ -138,6 +144,11 @@ class TuiServices:
     def decide(self, identity: str, approve: bool) -> dict[str, Any]:
         action = "approve" if approve else "reject"
         return _api("POST", f"/api/transfer-requests/{identity}/{action}", {}, timeout=self.request_timeout)
+
+    def decide_pairing(self, identity: str, code: str | None) -> dict[str, Any]:
+        action = "approve" if code is not None else "reject"
+        body = {"code": code} if code is not None else {}
+        return _api("POST", f"/api/pairing/requests/{identity}/{action}", body, timeout=self.request_timeout)
 
     @staticmethod
     def update_config(port: int, session_root: str) -> DevDropConfig:
@@ -176,7 +187,36 @@ class ConfirmDialog(ModalScreen[bool | None]):
         if event.button.id == "dialog-confirm":
             self.dismiss(True)
         elif event.button.id == "dialog-cancel":
-            self.dismiss(False)
+            self.dismiss(None)
+
+
+class PairingCodeDialog(ModalScreen[str | None]):
+    CSS = """
+    PairingCodeDialog { align: center middle; background: $background 75%; }
+    #pair-code-dialog { width: 1fr; max-width: 54; height: auto; border: round #a78bfa; background: #171421; padding: 1 2; }
+    #pair-code-input { margin-top: 1; }
+    """
+
+    def __init__(self, device: str, peer: str):
+        super().__init__()
+        self.device, self.peer = device, peer
+
+    def compose(self) -> ComposeResult:
+        with Vertical(id="pair-code-dialog"):
+            yield Static("Confirm phone pairing", classes="section-title", markup=False)
+            yield Static(f"Request from {self.device} · {self.peer}\nEnter the six digit code shown on the phone. The code is only a human check.", markup=False)
+            yield Input(placeholder="000000", id="pair-code-input", max_length=6, restrict=r"[0-9]*")
+            with Horizontal(id="dialog-buttons"):
+                yield Button("Cancel", id="pair-code-cancel")
+                yield Button("Approve phone", id="pair-code-approve", variant="primary")
+
+    def on_button_pressed(self, event: Button.Pressed) -> None:
+        if event.button.id == "pair-code-cancel":
+            self.dismiss(None)
+        elif event.button.id == "pair-code-approve":
+            code = self.query_one("#pair-code-input", Input).value.strip()
+            if len(code) == 6 and code.isdigit():
+                self.dismiss(code)
 
 
 class HelpDialog(ModalScreen[None]):
@@ -241,6 +281,10 @@ class DevDropTui(App[None]):
     Input { border: round #483b5b; background: #14121c; }
     #settings-save { margin-top: 2; background: #5b3d91; }
     #security-copy { height: auto; }
+    #pairing-qr-text { height: auto; background: #fff; color: #171421; padding: 1; margin-bottom: 1; }
+    #pairing-table { height: 8; min-height: 5; }
+    #pairing-actions { height: 3; }
+    #pairing-actions Button { width: 1fr; margin-right: 1; }
     #status-line { height: 1; color: #a99dbb; margin-top: 1; }
     Screen.compact #sidebar { width: 15; min-width: 13; padding: 1 0; }
     Screen.compact #main-pane { padding: 1; }
@@ -259,6 +303,7 @@ class DevDropTui(App[None]):
         self.current_page = "dashboard"
         self.selected_request: dict[str, Any] | None = None
         self.selected_history: dict[str, Any] | None = None
+        self.selected_pairing: dict[str, Any] | None = None
         self._tasks: dict[str, BackgroundTask] = {}
         self._tasks_lock = threading.Lock()
 
@@ -313,6 +358,13 @@ class DevDropTui(App[None]):
                             yield Static("Select a saved transfer to inspect details.", id="history-detail-copy", markup=False)
                     yield Static("", id="history-empty", classes="muted", markup=False)
                 with VerticalScroll(id="page-security", classes="page"):
+                    yield Static("Scan this one use QR in Android. Enter the phone's short code to approve it.", classes="section-title", markup=False)
+                    yield Static("QR unavailable", id="pairing-qr-text", markup=False)
+                    yield Static("No phone is waiting to connect.", id="pairing-status", classes="muted", markup=False)
+                    yield DataTable(id="pairing-table", cursor_type="row", zebra_stripes=True)
+                    with Horizontal(id="pairing-actions"):
+                        yield Button("Approve phone…", id="approve-pairing", variant="success", disabled=True)
+                        yield Button("Reject phone", id="reject-pairing", variant="error", disabled=True)
                     yield Static("Pairing and transport", classes="section-title", markup=False)
                     yield Static("Loading security state…", id="security-copy", classes="panel", markup=False)
                 with VerticalScroll(id="page-settings", classes="page"):
@@ -341,6 +393,7 @@ class DevDropTui(App[None]):
             ("transfer-table", ("Sender", "Request", "Files", "Size", "State")),
             ("outgoing-table", ("Direction", "Recipient ID", "File", "Server bytes sent", "State")),
             ("history-table", ("Time", "Direction", "File", "Size", "Status")),
+            ("pairing-table", ("Phone", "Address", "Expires")),
         ):
             table = self.query_one(f"#{table_id}", DataTable)
             table.add_columns(*columns)
@@ -394,6 +447,10 @@ class DevDropTui(App[None]):
             self._confirm_transfer(True)
         elif identity == "reject-transfer":
             self._confirm_transfer(False)
+        elif identity == "approve-pairing":
+            self._confirm_pairing(True)
+        elif identity == "reject-pairing":
+            self._confirm_pairing(False)
         elif identity == "settings-save":
             self._confirm_settings()
 
@@ -548,7 +605,13 @@ class DevDropTui(App[None]):
             self.selected_history = None
 
     def on_data_table_row_selected(self, event: DataTable.RowSelected) -> None:
-        if event.data_table.id == "transfer-table":
+        if event.data_table.id == "pairing-table":
+            key = str(event.row_key.value)
+            self.selected_pairing = next((item for item in self.snapshot_data.pairing_requests
+                                          if str(item.get("attempt_id")) == key), None)
+            self.query_one("#approve-pairing", Button).disabled = self.selected_pairing is None
+            self.query_one("#reject-pairing", Button).disabled = self.selected_pairing is None
+        elif event.data_table.id == "transfer-table":
             key = str(event.row_key.value)
             self.selected_request = next((item for item in self.snapshot_data.requests if str(item.get("id")) == key), None)
             self._render_transfer_detail()
@@ -592,19 +655,71 @@ class DevDropTui(App[None]):
         data = self.snapshot_data
         pairing = data.pairing
         security = data.security or {"https": False}
+        qr_widget = self.query_one("#pairing-qr-text", Static)
+        if pairing and pairing.get("state") == "ready":
+            keys = ("version", "url", "state", "attempt_id", "token", "expires_in",
+                    "ca_certificate_der", "ca_sha256", "server_certificate_sha256")
+            payload = json.dumps({key: pairing[key] for key in keys}, separators=(",", ":"))
+            qr = qrcode.QRCode(error_correction=qrcode.constants.ERROR_CORRECT_L, border=1)
+            qr.add_data(payload)
+            qr.make(fit=True)
+            image_text = Text()
+            for row in qr.get_matrix():
+                for value in row:
+                    image_text.append("█", style="black on white" if value else "white on white")
+                image_text.append("\n")
+            qr_widget.update(image_text)
+            self.query_one("#pairing-status", Static).update(f"Ready to scan · expires in {pairing.get('expires_in', 0)} seconds")
+        else:
+            qr_widget.update("Waiting for a phone or local HTTPS pairing unavailable.")
+            self.query_one("#pairing-status", Static).update("A phone request is waiting for your approval." if data.pairing_requests else "No phone is waiting to connect.")
+        self._fill_pairing_requests()
         if security.get("https"):
             tls_state = (f"HTTPS: Configured\nTLS host: {_safe(security.get('host', 'unknown'), 120)}\n"
                          f"Server certificate SHA-256: {security.get('fingerprint', 'unknown')}\n"
                          f"CA certificate SHA-256: {security.get('ca_fingerprint', 'unknown')}")
         else:
             tls_state = f"HTTPS unavailable: {_safe(security.get('error', 'TLS configuration is unavailable.'), 300)}\nHTTP fallback is disabled."
-        if pairing:
-            code = str(pairing.get("code", ""))
-            formatted = f"{code[:3]} {code[3:6]} {code[6:]}" if len(code) == 9 else "Unavailable"
-            code_line = f"Local pairing code: {formatted}\nExpires in: {pairing.get('expires_in', 0)} seconds"
-        else:
-            code_line = "Local pairing code unavailable; verify that the local server is running."
-        self.query_one("#security-copy", Static).update(f"{code_line}\n\n{tls_state}\n\nTransfers still require explicit one-use owner approval.")
+        self.query_one("#security-copy", Static).update(f"QR pairing is one use and expires after two minutes. The short phone code is only a human check.\n\n{tls_state}\n\nTransfers still require explicit one-use owner approval.")
+
+    def _fill_pairing_requests(self) -> None:
+        table = self.query_one("#pairing-table", DataTable)
+        table.clear()
+        for request in self.snapshot_data.pairing_requests:
+            table.add_row(Text(_safe(request.get("device", "Android phone"), 50)),
+                          Text(_safe(request.get("peer", "Unknown address"), 50)),
+                          f"{request.get('expires_in', 0)}s",
+                          key=str(request.get("attempt_id", "")))
+        if not self.snapshot_data.pairing_requests:
+            self.selected_pairing = None
+        self.query_one("#approve-pairing", Button).disabled = self.selected_pairing is None
+        self.query_one("#reject-pairing", Button).disabled = self.selected_pairing is None
+
+    def _confirm_pairing(self, approve: bool) -> None:
+        request = self.selected_pairing
+        if request is None:
+            return
+        if not approve:
+            self.push_screen(ConfirmDialog("Reject phone request?",
+                f"Reject pairing from {_safe(request.get('device', 'Android phone'))} at {_safe(request.get('peer', 'unknown address'))}?",
+                "Reject phone", "Cancel"),
+                lambda confirmed: self._start_pairing_decision(request, None) if confirmed else None)
+            return
+        self.push_screen(PairingCodeDialog(_safe(request.get("device", "Android phone")),
+                                           _safe(request.get("peer", "unknown address"))),
+                         lambda code: self._start_pairing_decision(request, code) if code else None)
+
+    def _start_pairing_decision(self, request: dict[str, Any], code: str | None) -> None:
+        identity = str(request.get("attempt_id", ""))
+        def decide(cancelled: threading.Event) -> None:
+            try:
+                self.services.decide_pairing(identity, code)
+                if not cancelled.is_set():
+                    self.post_message(UiNotice("Phone paired." if code else "Phone request rejected.", refresh=True))
+            except CliError as error:
+                if not cancelled.is_set():
+                    self.post_message(UiNotice(str(error), refresh=True))
+        self._start_background("pairing-decision", decide)
 
     def _confirm_transfer(self, approve: bool) -> None:
         request = self.selected_request

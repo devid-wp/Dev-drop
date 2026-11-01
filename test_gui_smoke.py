@@ -94,6 +94,33 @@ class GUITests(unittest.TestCase):
                 work()
                 client.assert_called_once_with("POST", "/api/transfer-requests/request-id/reject")
 
+    def test_qr_pairing_requires_owner_code_and_supports_reject(self) -> None:
+        import devdrop_gui
+        from PySide6.QtCore import Qt
+        window = self._track(devdrop_gui.MainWindow())
+        window.pairing_list.addItem("Pixel · 192.168.1.20 · 90s")
+        window.pairing_list.item(0).setData(Qt.ItemDataRole.UserRole, "pairing-id")
+        window.pairing_list.setCurrentRow(0)
+        with patch("devdrop_gui.QInputDialog.getText", return_value=("123456", True)), \
+             patch.object(window.client, "decide_pairing") as decide:
+            window.approve_pairing()
+            decide.assert_called_once_with("pairing-id", True, "123456")
+        with patch("devdrop_gui.QMessageBox.question", return_value=devdrop_gui.QMessageBox.StandardButton.Yes), \
+             patch.object(window.client, "decide_pairing") as decide:
+            window.reject_pairing()
+            decide.assert_called_once_with("pairing-id", False)
+
+    def test_qr_pairing_payload_contains_public_ca_and_one_use_token(self) -> None:
+        import devdrop_gui
+        window = self._track(devdrop_gui.MainWindow())
+        payload = {"version": 1, "url": "https://192.168.1.2:8765", "state": "ready",
+                   "attempt_id": "a" * 24, "token": "t" * 48, "expires_in": 90,
+                   "ca_certificate_der": "Y2E=", "ca_sha256": "b" * 64,
+                   "server_certificate_sha256": "c" * 64, "qr_svg": ""}
+        window._update_pairing_qr(payload)
+        self.assertIsNotNone(window.qr_code_value.pixmap())
+        self.assertIn("192.168.1.2", window.qr_address_value.text())
+
     def test_outgoing_file_offer_and_cancel_use_background_work(self) -> None:
         import devdrop_gui
         from PySide6.QtCore import Qt

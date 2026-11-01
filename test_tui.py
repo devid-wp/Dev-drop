@@ -5,14 +5,15 @@ import unittest
 from pathlib import Path
 
 from app.config import DevDropConfig
-from app.tui import ConfirmDialog, DevDropTui, HelpDialog, TuiSnapshot
-from textual.widgets import DataTable, Static
+from app.tui import ConfirmDialog, DevDropTui, HelpDialog, PairingCodeDialog, TuiSnapshot
+from textual.widgets import DataTable, Input, Static
 
 
 class FakeServices:
     def __init__(self, snapshot=None):
         self.data = snapshot or TuiSnapshot(config=DevDropConfig(Path("/tmp/DevDrop"), 8765))
         self.decisions = []
+        self.pairing_decisions = []
 
     def snapshot(self, cancelled=lambda: False):
         return self.data
@@ -20,6 +21,10 @@ class FakeServices:
     def decide(self, identity, approve):
         self.decisions.append((identity, approve))
         return {"id": identity, "status": "approved" if approve else "rejected"}
+
+    def decide_pairing(self, identity, code):
+        self.pairing_decisions.append((identity, code))
+        return {"state": "approved" if code else "rejected"}
 
     def update_config(self, port, session_root):
         return DevDropConfig(Path(session_root), port)
@@ -37,6 +42,33 @@ def pending_request():
 
 
 class TuiPilotTests(unittest.IsolatedAsyncioTestCase):
+    async def test_qr_pairing_and_explicit_phone_approval(self):
+        pairing = {"version": 1, "url": "https://192.168.1.2:8765", "state": "ready",
+                   "attempt_id": "a" * 24, "token": "t" * 48, "expires_in": 90,
+                   "ca_certificate_der": "Y2E=", "ca_sha256": "b" * 64,
+                   "server_certificate_sha256": "c" * 64}
+        pending = {"attempt_id": "request-123456789", "device": "Pixel", "peer": "192.168.1.20", "expires_in": 80}
+        services = FakeServices(TuiSnapshot(pairing=pairing, pairing_requests=[pending], config=DevDropConfig(Path("/tmp/DevDrop"), 8765)))
+        app = DevDropTui(services)
+        async with app.run_test(size=(110, 42)) as pilot:
+            await pilot.pause(0.1)
+            await pilot.click("#nav-security")
+            qr = app.query_one("#pairing-qr-text", Static)
+            self.assertNotIn("QR unavailable", str(qr.renderable))
+            table = app.query_one("#pairing-table", DataTable)
+            self.assertEqual(1, table.row_count)
+            table.move_cursor(row=0, column=0)
+            table.action_select_cursor()
+            await pilot.pause(0.05)
+            self.assertEqual(pending["attempt_id"], app.selected_pairing["attempt_id"])
+            app._confirm_pairing(True)
+            await pilot.pause(0.05)
+            self.assertIsInstance(app.screen, PairingCodeDialog)
+            app.screen.query_one("#pair-code-input", Input).value = "123456"
+            await pilot.click("#pair-code-approve")
+            await pilot.pause(0.1)
+            self.assertEqual([(pending["attempt_id"], "123456")], services.pairing_decisions)
+
     async def test_startup_and_navigation(self):
         services = FakeServices(TuiSnapshot(config=DevDropConfig(Path("/tmp/DevDrop"), 8765)))
         app = DevDropTui(services)

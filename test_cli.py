@@ -38,12 +38,23 @@ class CliTests(unittest.TestCase):
         self.assertNotIn("123456789", output)
         self.assertEqual(2, json.loads(output)["connected_devices"])
 
-    def test_pair_explicitly_displays_code_and_transfers_decide(self):
-        with patch.object(cli, "_api", return_value={"code": "987654321", "expires_in": 20}) as api:
+    def test_pair_explicitly_displays_qr_and_transfers_decide(self):
+        qr = {"version": 1, "url": "https://192.168.1.2:8765", "state": "ready",
+              "attempt_id": "a" * 24, "token": "t" * 48, "expires_in": 20,
+              "ca_certificate_der": "Y2E=", "ca_sha256": "b" * 64,
+              "server_certificate_sha256": "c" * 64, "qr_svg": "ignored"}
+        with patch.object(cli, "_api", return_value=qr) as api:
             code, output, _ = self.invoke("pair")
         self.assertEqual(0, code)
-        self.assertIn("987 654 321", output)
-        api.assert_called_once_with("GET", "/api/pairing-code")
+        self.assertIn("Scan this QR", output)
+        self.assertIn("compare the phone's short code", output)
+        api.assert_called_once_with("GET", "/api/pairing/qr")
+        with patch.object(cli, "_api", return_value=qr):
+            code, output, _ = self.invoke("pair", "--json")
+        parsed = json.loads(output)
+        self.assertEqual(0, code)
+        self.assertEqual("ready", parsed["state"])
+        self.assertNotIn("qr_svg", parsed["payload"])
         with patch.object(cli, "_api", return_value={"id": "request-id", "status": "approved"}) as api:
             code, output, _ = self.invoke("transfers", "--approve", "request-id")
         self.assertEqual(0, code)
