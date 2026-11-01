@@ -36,12 +36,26 @@ memory-only and are discarded on server restart. The existing local-owner
 Origin/Host checks protect administrative endpoints; phone endpoints are
 available only over HTTPS. Responses are marked `Cache-Control: no-store`.
 
-## Compatibility boundary
+## Client support, revocation, and compatibility
 
-This backend/API stage does not yet change Web Panel, TUI, PySide6 or Android
-screens. Existing clients continue using `/api/pairing-code` and `/api/pair`.
-The next client changes should consume this same API; no alternate pairing
-backend is needed. The server CA in QR is a trust bootstrap based on the user
-scanning the actual trusted PC screen. If the QR is delivered through an
-untrusted remote channel, this bootstrap is insufficient and must not be
-treated as authentic.
+The CLI `devdrop pair` prints a terminal QR. The TUI and PySide6 GUI render the
+same payload, and the loopback Web Panel shows a dynamic QR plus pending phone
+requests. The Android scanner parses this payload, verifies the CA fingerprint
+and TLS leaf pin plus hostname, posts a claim, displays its short code, then
+waits for the owner to approve it. No UI approves automatically. Android saves
+the issued Bearer token with its existing Android Keystore store.
+
+`devdrop pair --json` prints the one-use QR payload, including its short-lived
+pairing token. Treat that output as a credential; do not put it in logs or share
+it outside the intended pairing session.
+
+The owner may revoke a session from the Devices view through
+`POST /api/recipient-sessions/{opaque-session-id}/revoke`, which is loopback and
+Origin/Host gated and never returns the session token. Android also keeps its
+existing self revoke (`DELETE /api/session`) and local credential removal.
+
+Older clients can still call `/api/pairing-code` and `/api/pair`; the backend
+keeps this compatibility route while clients migrate. New clients use the QR
+flow. The server CA in QR is a trust bootstrap based on the user scanning the
+actual trusted PC screen. If the QR is delivered through an untrusted remote
+channel, this bootstrap is insufficient and must not be treated as authentic.

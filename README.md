@@ -10,7 +10,7 @@ No accounts. No cloud. Just your devices.
 
 - Local network file sharing
 - Text sharing
-- 9-digit pairing code, consumed by the first successful pairing
+- One-use QR pairing with explicit owner approval
 - Mobile-friendly web interface
 - Upload files from any device with a browser
 - Take and send photos directly from a phone
@@ -35,11 +35,12 @@ reuses existing local CA/certificate files, protects keys with owner-only OS
 permissions, and never enables HTTP. Optional Advanced Security Mode encrypts
 keys with a password. Existing encrypted local keys can be migrated to OS-only
 storage after consent; the encrypted originals are retained. The generated
-identity includes current LAN addresses. Android and browsers still require
-explicit CA trust. See
+identity includes current LAN addresses. Android obtains the CA identity from
+the QR scanned directly from the PC; browser certificate trust remains a
+separate OS/browser setup. See
 [HTTPS and certificate trust](docs/TRANSPORT.md).
 
-DevDrop will display something like:
+DevDrop displays the HTTPS address, QR pairing state, and save location:
 
 ```text
 ╭────────────────────────────────────────────────────────╮
@@ -50,19 +51,23 @@ DevDrop will display something like:
 │                                                        │
 ╰────────────────────────────────────────────────────────╯
 
-Pairing code   223 975 676
 Open           https://192.168.0.107:8765
 Session        C:\Users\user\DevDrop\session-2026-08-18_15-06-38
 
 Waiting for devices...
 ```
 
-On another device:
+On Android:
 
 1. Connect to the same local network.
-2. Open the displayed HTTPS address with the verified CA already trusted; stop on any certificate warning.
-3. Enter the pairing code.
-4. Request a transfer and wait for the owner to approve it in the desktop GUI.
+2. Open Dev-Drop and tap **Scan QR**.
+3. Compare the short code shown on the phone with the request on the PC, enter
+   that code in the local Web Panel, TUI, or desktop GUI, and approve explicitly.
+4. Choose files to send. Each transfer still requires its own owner approval.
+
+From a terminal, `devdrop pair` prints the same time-limited QR. The pairing
+token is one use and expires after two minutes. See
+[the QR protocol](docs/QR_PAIRING.md) for trust and compatibility details.
 
 Received data is stored inside the current DevDrop session directory.
 

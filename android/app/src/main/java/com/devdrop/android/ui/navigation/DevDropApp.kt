@@ -110,8 +110,11 @@ fun DevDropApp(viewModel: DevDropViewModel) {
                         codeScanner.startScan()
                             .addOnSuccessListener { barcode ->
                                 barcode.rawValue?.let { payload ->
-                                    if (viewModel.useQrPayload(payload)) navController.navigate("connect")
-                                } ?: viewModel.showNotice("The QR code did not contain an address.")
+                                    if (viewModel.useQrPayload(payload)) {
+                                        navController.navigate("connect")
+                                        viewModel.pair()
+                                    }
+                                } ?: viewModel.showNotice("This QR code does not contain a valid Dev-Drop pairing request.")
                             }
                             .addOnFailureListener { viewModel.showNotice("QR scanner unavailable. Enter the HTTPS address manually.") }
                     },
@@ -129,6 +132,7 @@ fun DevDropApp(viewModel: DevDropViewModel) {
                     onFingerprintChanged = viewModel::setFingerprintConfirmation,
                     onPairingCodeChanged = viewModel::setPairingCode,
                     onPair = viewModel::pair,
+                    onCancelPairing = { viewModel.cancelPairing(); navController.popBackStack() },
                     onCheck = viewModel::checkConnection,
                     onDisconnect = viewModel::disconnect,
                     onBack = { navController.popBackStack() },

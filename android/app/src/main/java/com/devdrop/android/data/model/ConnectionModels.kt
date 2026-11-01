@@ -31,6 +31,10 @@ data class ConnectionUiState(
     val selectedCaAddress: String? = null,
     val fingerprintConfirmation: String = "",
     val pairingCode: String = "",
+    val qrPairing: Boolean = false,
+    val qrAttemptId: String? = null,
+    val qrToken: String? = null,
+    val qrServerFingerprint: String? = null,
     val connectedAddress: String? = null,
     val connectedName: String? = null,
     val trustedFingerprint: String? = null,
@@ -44,6 +48,8 @@ sealed class ConnectionException(message: String) : Exception(message) {
     data object TlsIdentity : ConnectionException("TLS trust or server hostname verification failed. Check the CA, address, and certificate SAN.")
     data object NetworkUnavailable : ConnectionException("The server could not be reached. Check the address and local network.")
     data object InvalidPairingCode : ConnectionException("Pairing code is invalid or expired. Ask the computer owner for the current code.")
+    data object PairingExpired : ConnectionException("The QR pairing expired. Scan a fresh code from the computer.")
+    data object PairingRejected : ConnectionException("The computer owner rejected this connection request.")
     data object SessionExpired : ConnectionException("The session expired. Pair this device again.")
     data class HttpFailure(val status: Int) : ConnectionException("The server returned HTTP $status.")
     data object InvalidServerResponse : ConnectionException("The server response was not a valid Dev-Drop response.")

@@ -43,6 +43,7 @@ fun ConnectionSetupScreen(
     onFingerprintChanged: (String) -> Unit,
     onPairingCodeChanged: (String) -> Unit,
     onPair: () -> Unit,
+    onCancelPairing: () -> Unit,
     onCheck: () -> Unit,
     onDisconnect: () -> Unit,
     onBack: () -> Unit,
@@ -66,6 +67,26 @@ fun ConnectionSetupScreen(
                     }
                     TextButton(onClick = onDisconnect, modifier = Modifier.fillMaxWidth()) { Text("Disconnect") }
                 }
+            }
+        } else if (state.qrPairing) {
+            StepCard("01", "Secure PC connection", "The scanned QR carries a one use token and the computer's public CA. Android validates the QR fingerprints, certificate chain, and server hostname before sending it.") {
+                DetailLine("HTTPS address", state.addressDraft)
+                state.selectedCaSha256?.let { DetailLine("QR CA SHA-256", it, mono = true) }
+            }
+            StepCard("02", "Confirm this phone", "Enter this six digit number on the computer only when its local screen shows this phone and address. The number is a human check, not an authentication secret.") {
+                Text(state.pairingCode, style = MaterialTheme.typography.headlineLarge, fontFamily = FontFamily.Monospace,
+                    color = MaterialTheme.colorScheme.primary)
+                Text(if (state.phase == ConnectionPhase.Connecting) "Waiting for approval on the computer…" else "Ready to request pairing",
+                    style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
+            state.errorMessage?.let { Text(it, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.error) }
+            if (state.phase == ConnectionPhase.Connecting) {
+                OutlinedButton(onClick = onCancelPairing, modifier = Modifier.fillMaxWidth().height(50.dp), shape = CircleShape) { Text("Cancel pairing") }
+            } else if (state.phase == ConnectionPhase.Error) {
+                OutlinedButton(onClick = onBack, modifier = Modifier.fillMaxWidth().height(50.dp), shape = CircleShape) { Text("Scan a fresh QR") }
+            } else {
+                Button(onClick = onPair, enabled = state.phase != ConnectionPhase.Connecting,
+                    modifier = Modifier.fillMaxWidth().height(54.dp), shape = CircleShape) { Text("Request PC approval") }
             }
         } else {
             StepCard("01", "Server address", "A QR code contains only the HTTPS address. It does not establish trust or carry a pairing code.") {

@@ -130,7 +130,7 @@ class VerifiedHttpsClientTest {
         val server = serverContext.serverSocketFactory.createServerSocket(0, 4, InetAddress.getByName("127.0.0.1")) as javax.net.ssl.SSLServerSocket
         val seen = mutableListOf<Pair<String, String?>>()
         val worker = Thread {
-            repeat(5) {
+            repeat(9) {
                 val socket = server.accept() as javax.net.ssl.SSLSocket
                 socket.use { peer ->
                     try {
@@ -149,9 +149,18 @@ class VerifiedHttpsClientTest {
                             offset += count
                         }
                         val authorization = headers.drop(1).firstOrNull { it.startsWith("authorization:", true) }?.substringAfter(':')?.trim()
+                        val pollKey = headers.drop(1).firstOrNull { it.startsWith("x-pairing-poll-key:", true) }?.substringAfter(':')?.trim()
                         synchronized(seen) { seen += requestLine to authorization }
                         val (status, response) = when {
                             requestLine.startsWith("GET /api/health ") -> 200 to "{\"status\":\"ok\",\"app\":\"DevDrop\"}"
+                            requestLine.startsWith("POST /api/pairing/claims ") -> {
+                                synchronized(seen) { seen += "PAIRING_CLAIM_BODY" to requestBody.toString(Charsets.UTF_8) }
+                                200 to "{\"attempt_id\":\"server_attempt_123456789\",\"expires_in\":120}"
+                            }
+                            requestLine.startsWith("GET /api/pairing/claims/server_attempt_123456789 ") -> {
+                                synchronized(seen) { seen += "POLL_KEY" to pollKey }
+                                200 to "{\"state\":\"approved\",\"token\":\"unit-test-session-token-123456\"}"
+                            }
                             requestLine.startsWith("POST /api/pair ") -> {
                                 synchronized(seen) { seen += "PAIR_BODY" to requestBody.toString(Charsets.UTF_8) }
                                 200 to "{\"paired\":true,\"token\":\"unit-test-session-token-123456\"}"
@@ -173,7 +182,16 @@ class VerifiedHttpsClientTest {
         try {
             val client = DevDropHttpClient()
             val address = "https://localhost:${server.localPort}"
+            val serverPin = MessageDigest.getInstance("SHA-256").digest(serverCert.encoded).joinToString("") { "%02x".format(it) }
+            client.health(address, ca.der, serverPin)
+            assertThrows(ConnectionException.TlsIdentity::class.java) { client.health(address, ca.der, "0".repeat(64)) }
             client.health(address, ca.der)
+            val attemptId = client.claimQrPairing(address, ca.der, serverPin, "qr_window_1234567890", "Q".repeat(48),
+                "P".repeat(48), "009821", "Android Pixel")
+            assertEquals("server_attempt_123456789", attemptId)
+            val (pairingState, pairingToken) = client.qrPairingResult(address, ca.der, serverPin, attemptId, "P".repeat(48))
+            assertEquals("approved", pairingState)
+            assertEquals("unit-test-session-token-123456", pairingToken)
             assertEquals("unit-test-session-token-123456", client.pair(address, ca.der, "123456789"))
             client.verifySession(address, ca.der, "unit-test-session-token-123456")
             client.revokeSession(address, ca.der, "unit-test-session-token-123456")
@@ -181,17 +199,25 @@ class VerifiedHttpsClientTest {
                 client.health("https://127.0.0.1:${server.localPort}", ca.der)
             }
             synchronized(seen) {
-                assertEquals(5, seen.size)
-                val requests = seen.filterNot { it.first == "PAIR_BODY" }
-                assertEquals(4, requests.size)
+                assertEquals(11, seen.size)
+                val requests = seen.filterNot { it.first in setOf("PAIR_BODY", "PAIRING_CLAIM_BODY", "POLL_KEY") }
+                assertEquals(8, requests.size)
                 assertEquals("GET /api/health HTTP/1.1", requests[0].first)
                 assertNull(requests[0].second)
                 assertEquals("{\"code\":\"123456789\"}", seen.first { it.first == "PAIR_BODY" }.second)
                 assertNull(requests[1].second)
-                assertEquals("GET /api/incoming-offers HTTP/1.1", requests[2].first)
-                assertEquals("Bearer unit-test-session-token-123456", requests[2].second)
-                assertEquals("DELETE /api/session HTTP/1.1", requests[3].first)
-                assertEquals("Bearer unit-test-session-token-123456", requests[3].second)
+                assertEquals("GET /api/health HTTP/1.1", requests[2].first)
+                assertNull(requests[2].second)
+                assertEquals("POST /api/pairing/claims HTTP/1.1", requests[3].first)
+                assertNull(requests[3].second)
+                assertTrue(seen.first { it.first == "PAIRING_CLAIM_BODY" }.second!!.contains("\"code\":\"009821\""))
+                assertEquals("P".repeat(48), seen.first { it.first == "POLL_KEY" }.second)
+                assertEquals("GET /api/pairing/claims/server_attempt_123456789 HTTP/1.1", requests[4].first)
+                assertNull(requests[4].second)
+                assertEquals("GET /api/incoming-offers HTTP/1.1", requests[6].first)
+                assertEquals("Bearer unit-test-session-token-123456", requests[6].second)
+                assertEquals("DELETE /api/session HTTP/1.1", requests[7].first)
+                assertEquals("Bearer unit-test-session-token-123456", requests[7].second)
             }
             worker.join(2_000)
         } finally {

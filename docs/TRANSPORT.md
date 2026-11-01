@@ -115,30 +115,26 @@ TLS 1.2 minimum (CPython secure server defaults), and modern ECDHE ciphers.
 
 ## First trusted phone connection
 
-1. Obtain the **public CA certificate** over a trusted independent channel, such
-   as USB directly from the owner's computer. Verify its SHA-256 against the
-   owner's trusted/offline display before installation. A CA or fingerprint
-   downloaded over unauthenticated LAN HTTP is not an identity proof.
-2. Install this specific CA for website/server authentication in the phone's
-   trusted certificate store. It is a CA certificate, not a Wi-Fi/client identity
-   certificate. Menu names vary by Android vendor/version. Installing a CA is a
-   security-sensitive change affecting other sites too; use a dedicated CA and
-   remove it when no longer needed.
-3. Open only the configured **HTTPS** address from the owner's QR/display. A
-   certificate warning means stop: check trust, date and SAN/address. Do not
-   bypass the warning. Only after a warning-free, verified connection enter the
-   pairing code. Tokens and transfers then travel within TLS; the existing
-   Bearer/session and separate owner-approval rules still apply.
+The native Android app does not require installing the local CA into Android's
+global trust store. Scan the live QR from the trusted PC screen. The QR carries
+the HTTPS address, public CA certificate, its SHA-256, the server leaf
+fingerprint, and a one-use high-entropy pairing token. Android validates the CA
+fingerprint and then checks the TLS chain, certificate hostname/SAN, and leaf
+fingerprint before sending the pairing token. The phone displays a short code;
+the owner enters it in the local Web Panel, TUI, or PySide6 GUI and explicitly
+approves the request. The short code is a human comparison value, not an
+authentication secret. The process expires after two minutes.
 
-Android Chrome consults locally managed trust; a correctly installed CA and
-matching SAN are prerequisites, not an automatic guarantee for every vendor's
-configuration. Firefox Android may additionally require its **Use third party
-CA certificates** setting and a restart; availability varies by build/version.
-If that browser does not accept the installed CA, it is unsupported by this
-setup: use a browser that validates it correctly, never a warning exception.
-Windows browsers also need the CA installed in their relevant trust store; the
-Python GUI uses its explicit CA file instead. No physical Android/Windows browser
-verification has been performed by automated Linux tests.
+This trust bootstrap relies on scanning the code displayed on the intended PC.
+Do not treat a QR copied from an untrusted remote source as authentic. Browsers
+still use the operating system/browser trust store and may require the public
+CA to be installed there; never bypass a certificate warning.
+
+Android Chrome and other browsers do not automatically use the app's QR trust
+bootstrap. Browser access may require installing the public CA in the relevant
+OS/browser trust store; behavior varies by platform/version. No physical
+Android/Windows browser verification has been performed by automated Linux
+tests.
 
 ## Identity changes and remaining boundaries
 

@@ -1,10 +1,10 @@
 # Android client API integration
 
-The Android M1 client implements real UDP server discovery, HTTPS health checks,
-CA-verified pairing, encrypted local session storage, authenticated session
-checks, reconnect, and disconnect. File transfer is a later milestone. The
-protocol details below were checked against the current FastAPI routes and
-`app/discovery.py`.
+The Android client implements UDP server discovery, QR-bound TLS identity,
+owner-approved pairing, encrypted local session storage, authenticated
+reconnect, Android-to-PC uploads, and PC-to-Android downloads with SHA-256
+receipt confirmation. The protocol details below were checked against the
+current FastAPI routes and `app/discovery.py`.
 
 ## Server discovery
 
@@ -21,55 +21,51 @@ until the CA and HTTPS hostname have been verified.
 
 ## Pairing and session token
 
-The existing desktop QR payload contains only the configured HTTPS base URL; it
-does not contain the pairing code or a trust credential. The 9-digit pairing
-code is exposed only to a direct loopback owner by
-`GET /api/pairing-code`; a phone receives it out-of-band from the computer
-owner. Pair over HTTPS with `POST /api/pair` and JSON `{"code":"123456789"}`.
-A successful response includes `{"paired":true,"token":"…"}`. Keep the
-Bearer token only in private app storage, do not put it in a URL, logs, or
-analytics, and send it as `Authorization: Bearer <token>` on session APIs.
-The backend session currently expires after one hour; pairing again creates a
-new session. A successful pairing consumes the current five-minute code
-atomically, including when pairing requests race. The owner's next status/code
-read creates a fresh code. Android disconnect clears local credentials and
-best-effort revokes that exact Bearer session with `DELETE /api/session`; an
-offline disconnect cannot reach the server, so its token remains valid there
-until expiry. A device name or discovery response is never an authorization
-credential.
+The owner obtains a one-use payload from `GET /api/pairing/qr`. It contains the
+HTTPS URL, a random QR token and window ID, expiry, DER CA certificate, CA
+SHA-256, and leaf certificate SHA-256. The Android app checks the CA hash, then
+performs TLS chain and hostname verification plus the QR leaf pin check before
+sending the QR token. It posts a six digit phone display code, a separate
+random 256-bit polling key, and device label to `POST /api/pairing/claims`.
+That QR token is consumed atomically; the short code is only a human check.
+
+The owner reviews `GET /api/pairing/requests`, enters the code displayed by
+the phone and explicitly calls `POST /api/pairing/requests/{id}/approve`, or
+rejects it. A mismatch is terminal. Android polls
+`GET /api/pairing/claims/{id}` with `X-Pairing-Poll-Key`; the normal one-hour
+Bearer session is returned once to that key, after approval. Keep the Bearer
+token only in Android Keystore-backed app storage, never in URLs/logs, and send
+it as `Authorization: Bearer <token>` on session APIs. Sessions can be revoked
+by the owner through the local-only recipient-session revoke route or by the
+phone through `DELETE /api/session`. A device name or discovery response is
+never an authorization credential.
+
+The old `/api/pairing-code` and `/api/pair` route remains for older clients
+during migration; new Android builds use QR pairing.
 
 ## TLS identity and first trust
 
-All app and transfer routes require HTTPS, and the backend refuses HTTP; the
-repository's trust setup uses a dedicated local CA. Android must validate the
-certificate chain, validity period, and hostname/SAN against that CA before
-sending a pairing code or token. The CA certificate and its SHA-256 fingerprint
-must be provisioned to the phone through a trusted independent channel and
-verified against the computer owner's display. Do not accept a certificate
-fetched over unauthenticated LAN discovery, do not silently trust on first use,
-and do not bypass hostname or chain errors. The Android app lets the user select
-the public CA certificate with the Storage Access Framework, displays its
-SHA-256, and requires an exact manual match with the independently obtained
-fingerprint before pairing. Its TLS context trusts only that CA and retains
-platform hostname/SAN verification. Trust material is never fetched from LAN
-discovery. The CA, server address, and Bearer token are encrypted with an
-Android Keystore AES-GCM key. On reconnect, the app checks `/api/health`, then
+All app and transfer routes require HTTPS, and the backend refuses HTTP.
+Android trusts only the CA encoded in the scanned QR, validates its declared
+fingerprint, verifies the server chain, hostname/SAN, and leaf fingerprint,
+and sends no credentials before those checks pass. QR trust is valid only when
+the user scans the code shown on the trusted PC screen; remote QR images are
+not an authenticated trust channel. LAN discovery is never a trust source.
+The CA, server address, and Bearer token are encrypted with an Android
+Keystore AES-GCM key. On reconnect, the app checks `/api/health`, then
 validates the session with authenticated `GET /api/incoming-offers`; a 401
-clears the token and requires pairing again.
+clears the token and requires a fresh owner-approved QR pairing.
 
 ### Android first connection
 
-1. Obtain the public CA certificate and its SHA-256 fingerprint over a trusted
-   independent channel, such as USB. The fingerprint must be checked against
-   the computer owner's trusted display.
-2. In Dev-Drop Android, scan the QR or enter the configured HTTPS address. The
-   QR contains only the URL. Select the CA certificate and compare its displayed
-   SHA-256 to the independently obtained owner value. Never use an unverified
-   certificate or fingerprint.
-3. Enter the current 9-digit pairing code shown by the computer owner. The app
-   sends it only after certificate-chain and hostname/SAN validation. The code
-   expires in five minutes and the first successful pairing consumes it. Each
-   file transfer still requires its separate computer-owner approval.
+1. Start Dev-Drop on the PC and open its local Web Panel, TUI, or PySide6 GUI.
+2. In Android, tap **Scan QR** and scan the live QR shown on the PC.
+3. Check the phone's six digit number against the connection request on the
+   PC. Enter the number on the PC and explicitly approve the phone. The number
+   is not an authentication secret; the random QR and poll tokens provide
+   protocol authorization.
+4. If the QR expires or the owner rejects it, scan a fresh QR. Each file
+   transfer still requires its separate computer-owner approval.
 
 The Android app does not alter the phone's global CA store. Browser trust
 behavior remains platform-specific; the Python GUI uses its explicit CA file.

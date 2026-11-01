@@ -25,6 +25,7 @@ import com.devdrop.android.data.network.VerifiedDownload
 import com.devdrop.android.data.repository.DefaultDevDropConnectionRepository
 import com.devdrop.android.data.repository.DevDropConnectionRepository
 import com.devdrop.android.data.security.ServerTrust
+import com.devdrop.android.data.security.QrPairingPayload
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -93,6 +94,7 @@ class DevDropViewModel(
     private val transferHttp = DevDropHttpClient()
     private var transferJob: Job? = null
     private var incomingDownloadJob: Job? = null
+    private var pairingJob: Job? = null
     private var destinationOffer: IncomingFileOffer? = null
     private data class PendingReceipt(val connection: com.devdrop.android.data.model.TrustedConnection,
                                       val offer: IncomingFileOffer, val result: VerifiedDownload)
@@ -151,17 +153,17 @@ class DevDropViewModel(
     }
 
     fun useQrPayload(payload: String): Boolean {
-        val address = ServerAddress.normalize(payload) ?: run {
-            updateConnection { it.copy(phase = ConnectionPhase.Error, errorMessage = "This QR is not a Dev-Drop HTTPS address.") }
+        val pairing = runCatching { QrPairingPayload.parse(payload) }.getOrElse { error ->
+            updateConnection { it.copy(phase = ConnectionPhase.Error, errorMessage = safeMessage(error)) }
             return false
         }
-        updateConnection { current ->
-            val keepTrust = current.selectedCaAddress == address
-            current.copy(addressDraft = address, phase = ConnectionPhase.PairingRequired, errorMessage = null,
-                selectedCaDer = if (keepTrust) current.selectedCaDer else null,
-                selectedCaSha256 = if (keepTrust) current.selectedCaSha256 else null,
-                selectedCaAddress = if (keepTrust) current.selectedCaAddress else null,
-                fingerprintConfirmation = if (keepTrust) current.fingerprintConfirmation else "")
+        val code = java.security.SecureRandom().nextInt(1_000_000).toString().padStart(6, '0')
+        updateConnection {
+            it.copy(addressDraft = pairing.address, phase = ConnectionPhase.PairingRequired, errorMessage = null,
+                selectedCaDer = pairing.caDer, selectedCaSha256 = pairing.caSha256,
+                selectedCaAddress = pairing.address, fingerprintConfirmation = pairing.caSha256,
+                pairingCode = code, qrPairing = true, qrAttemptId = pairing.attemptId,
+                qrToken = pairing.token, qrServerFingerprint = pairing.serverCertificateSha256)
         }
         return true
     }
@@ -185,18 +187,40 @@ class DevDropViewModel(
     fun pair() {
         val current = _uiState.value.connection
         val ca = current.selectedCaDer ?: run { updateConnection { it.copy(errorMessage = "Select the Dev-Drop CA certificate first.") }; return }
+        pairingJob?.cancel()
+        pairingJob = null
         updateConnection { it.copy(phase = reduceConnectionPhase(it.phase, ConnectionEvent.Connect), errorMessage = null) }
-        viewModelScope.launch {
-            runCatching { repository.pair(current.addressDraft, ca, current.fingerprintConfirmation, current.pairingCode) }
+        pairingJob = viewModelScope.launch {
+            runCatching {
+                if (current.qrPairing) {
+                    repository.pairQr(current.addressDraft, ca, current.selectedCaSha256.orEmpty(),
+                        current.qrServerFingerprint.orEmpty(), current.qrAttemptId.orEmpty(), current.qrToken.orEmpty(),
+                        current.pairingCode, "Android ${android.os.Build.MODEL}")
+                } else repository.pair(current.addressDraft, ca, current.fingerprintConfirmation, current.pairingCode)
+            }
                 .onSuccess { saved ->
                     updateConnection {
                         it.copy(phase = reduceConnectionPhase(it.phase, ConnectionEvent.Connected), connectedAddress = saved.address,
                             connectedName = saved.serverName, trustedFingerprint = saved.caSha256, addressDraft = saved.address,
-                            errorMessage = null, pairingCode = "")
+                            errorMessage = null, pairingCode = "", qrToken = null, qrAttemptId = null,
+                            qrServerFingerprint = null, qrPairing = false)
                     }
                 }
-                .onFailure { error -> updateConnection { it.copy(phase = ConnectionPhase.Error, errorMessage = safeMessage(error)) } }
+                .onFailure { error ->
+                    if (error is kotlinx.coroutines.CancellationException) throw error
+                    updateConnection { it.copy(phase = ConnectionPhase.Error, errorMessage = safeMessage(error),
+                        qrToken = null, qrAttemptId = null, qrServerFingerprint = null) }
+                }
         }
+    }
+
+    fun cancelPairing() {
+        pairingJob?.cancel()
+        pairingJob = null
+        repository.cancelPairing()
+        updateConnection { it.copy(phase = ConnectionPhase.PairingRequired, pairingCode = "", qrToken = null,
+            qrAttemptId = null, qrServerFingerprint = null, qrPairing = false,
+            errorMessage = "Pairing cancelled. Scan a fresh QR code to try again.") }
     }
 
     fun retryConnection() {

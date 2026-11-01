@@ -7,30 +7,29 @@ use an HTTP URL during these checks.
 
 ## Prepare the PC
 
-1. Configure the TLS certificate, private key, CA, and address as documented in
-   [TRANSPORT.md](TRANSPORT.md). Confirm the certificate SAN contains the exact
-   LAN address and `127.0.0.1` for local desktop clients.
+1. Start Dev-Drop without preconfiguring TLS. Accept automatic local HTTPS
+   setup; confirm the HTTPS address and QR appear. Existing TLS identities
+   should be reused.
 2. Start the existing PySide6 desktop app (`python devdrop_gui.py`) or the
    existing server launcher (`python devdrop.py`). Use only one process on the
-   configured port. Confirm the UI reports HTTPS and shows a fresh 9-digit
-   pairing code.
+   configured port. Confirm the UI reports HTTPS and shows a live QR.
 3. Ensure the PC has free space in its configured session directory. For
    outgoing PC-to-phone offers, also ensure free space for a private snapshot;
    preparation temporarily copies the source file.
 
 ## Pair and check session lifecycle
 
-1. On Android, install the public CA through a trusted channel, compare its
-   displayed SHA-256 fingerprint with the PC's trusted value, then connect to
-   the PC's HTTPS address and enter the current code.
+1. On Android, scan the QR shown on the PC. Compare the six digit code on the
+   phone with the request on the PC, enter it on the PC, and explicitly approve.
 2. Confirm the Android app reaches Connected and the PC lists one session.
-   Confirm the displayed pairing code changes on the next PC status refresh.
-3. Try the already-used code from a second Android install/profile. It must be
-   rejected. The intended device must use the newly displayed code.
+3. Attempt a mismatched short code and confirm the request is terminally
+   rejected. Reuse a scanned QR token from another Android install/profile; it
+   must be rejected. Scan a fresh QR for the intended device.
 4. Disconnect in Android while online. The device should disappear from the
    PC recipient list after refresh. Pair again and confirm a new session ID.
-   An offline Android disconnect cannot revoke remotely; the server session
-   remains valid until its one-hour expiry or server restart.
+   Also revoke a session from the local Web Panel Devices view. The Android
+   reconnect must require a fresh QR. An offline Android disconnect cannot
+   revoke remotely; the server session remains valid until expiry or restart.
 5. Change the PC address to a hostname/IP absent from the certificate SAN or
    temporarily use an untrusted CA in a test profile. Android must refuse before
    sending pairing/session credentials.
@@ -60,8 +59,8 @@ use an HTTP URL during these checks.
 
 ## Limits to record
 
-- Pairing codes are one-use and expire after five minutes. Every additional
-  device needs the new code displayed after the previous successful pairing.
+- QR pairing tokens are one-use and expire after two minutes. The short numeric
+  code is a human check only; it is not an authentication secret.
 - Bearer sessions are process-local and last at most one hour. There is no
   background keepalive or presence protocol. Server restart invalidates them.
 - A disconnect while offline clears Android's local credentials but cannot

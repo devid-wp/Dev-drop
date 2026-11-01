@@ -17,11 +17,17 @@ import com.devdrop.android.data.security.ServerTrust
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.ensureActive
+import kotlin.coroutines.coroutineContext
 import java.io.IOException
 
 interface DevDropConnectionRepository {
     suspend fun discover(): List<DiscoveredServer>
     suspend fun pair(address: String, caDer: ByteArray, confirmedCaFingerprint: String, code: String): TrustedConnection
+    suspend fun pairQr(address: String, caDer: ByteArray, caFingerprint: String, serverFingerprint: String,
+                       windowId: String, qrToken: String, code: String, device: String): TrustedConnection
+    fun cancelPairing()
     suspend fun reconnect(saved: TrustedConnection): TrustedConnection
     suspend fun verify(connection: TrustedConnection)
     suspend fun incomingOffers(connection: TrustedConnection): List<IncomingFileOffer>
@@ -40,6 +46,7 @@ class DefaultDevDropConnectionRepository(context: Context) : DevDropConnectionRe
     private val discovery = DevDropDiscoveryClient(context)
     private val secureStore = SecureConnectionStore(context)
     private val http = DevDropHttpClient()
+    private val qrPairingApi = DevDropHttpClient()
     private val incomingApi = DevDropHttpClient()
     private val incomingDownloader = DevDropHttpClient()
     private val receiptApi = DevDropHttpClient()
@@ -61,6 +68,41 @@ class DefaultDevDropConnectionRepository(context: Context) : DevDropConnectionRe
         http.health(normalizedAddress, ca.der)
         val token = http.pair(normalizedAddress, ca.der, code)
         TrustedConnection(normalizedAddress, ca.der, ca.sha256, token).also(secureStore::save)
+    }
+
+    override suspend fun pairQr(address: String, caDer: ByteArray, caFingerprint: String, serverFingerprint: String,
+                                windowId: String, qrToken: String, code: String, device: String): TrustedConnection {
+        val normalizedAddress = ServerAddress.normalize(address) ?: throw ConnectionException.InvalidAddress
+        val ca = ServerTrust.readCaCertificate(caDer)
+        if (ca.sha256 != caFingerprint || !code.matches(Regex("[0-9]{6}"))) {
+            throw ConnectionException.FingerprintMismatch
+        }
+        withContext(Dispatchers.IO) { qrPairingApi.health(normalizedAddress, ca.der, serverFingerprint) }
+        val pollKey = java.util.Base64.getUrlEncoder().withoutPadding().encodeToString(
+            ByteArray(32).also(java.security.SecureRandom()::nextBytes))
+        val claimId = withContext(Dispatchers.IO) {
+            qrPairingApi.claimQrPairing(normalizedAddress, ca.der, serverFingerprint,
+                windowId, qrToken, pollKey, code, device)
+        }
+        val deadline = System.currentTimeMillis() + 120_000
+        while (System.currentTimeMillis() < deadline) {
+            coroutineContext.ensureActive()
+            val (state, token) = withContext(Dispatchers.IO) {
+                qrPairingApi.qrPairingResult(normalizedAddress, ca.der, serverFingerprint, claimId, pollKey)
+            }
+            if (state == "approved" && !token.isNullOrBlank() && token.length in 16..256) {
+                val trusted = TrustedConnection(normalizedAddress, ca.der, ca.sha256, token)
+                secureStore.save(trusted)
+                return trusted
+            }
+            if (state !in setOf("pending", "approved")) throw ConnectionException.PairingExpired
+            delay(500)
+        }
+        throw ConnectionException.PairingExpired
+    }
+
+    override fun cancelPairing() {
+        qrPairingApi.cancelActiveRequest()
     }
 
     override suspend fun reconnect(saved: TrustedConnection): TrustedConnection = withContext(Dispatchers.IO) {

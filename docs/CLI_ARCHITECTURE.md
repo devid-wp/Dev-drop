@@ -38,7 +38,7 @@ local-owner checks and connects requests to existing service objects.
 | `devdrop status` | Available | Reads local `/api/status`; omits the pairing code. |
 | `devdrop serve` | Available | Starts the existing FastAPI app with the configured TLS identity and a new session folder. |
 | `devdrop devices` | Available | Runs existing LAN UDP discovery. |
-| `devdrop pair` | Available | Shows this computer's current pairing code for a phone/browser; it does not create a remote CLI session. |
+| `devdrop pair` | Available | Displays the current one-use QR for a phone and points to the local owner interfaces for approval. `--json` prints the QR payload. |
 | `devdrop transfers` | Available | Lists local pending owner requests; explicit `--approve ID` or `--reject ID` calls the local owner decision route. |
 | `devdrop history` | Available | Reads existing local transfer history. |
 | `devdrop config` | Available | Reads or writes only `session_root` and `port`. |

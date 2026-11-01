@@ -91,8 +91,9 @@ class DevDropHttpClient {
         } finally { activeConnection = null; connection?.disconnect() }
     }
 
-    fun health(address: String, caDer: ByteArray) {
-        val body = request(address, "/api/health", caDer, null, "GET", null)
+    fun health(address: String, caDer: ByteArray, expectedServerSha256: String? = null) {
+        val body = request(address, "/api/health", caDer, null, "GET", null,
+            expectedServerSha256 = expectedServerSha256)
         val response = FlatJson.parse(body.toString(Charsets.UTF_8)) ?: throw ConnectionException.InvalidServerResponse
         if (response["status"] != "ok" || response["app"] != "DevDrop") {
             throw ConnectionException.InvalidServerResponse
@@ -108,6 +109,34 @@ class DevDropHttpClient {
             throw ConnectionException.InvalidServerResponse
         }
         return token
+    }
+
+    fun claimQrPairing(address: String, caDer: ByteArray, expectedServerSha256: String,
+                       windowId: String, qrToken: String, pollKey: String, code: String, device: String): String {
+        val body = JSONObject().put("attempt_id", windowId).put("token", qrToken)
+            .put("poll_key", pollKey).put("code", code).put("device", device).toString().toByteArray()
+        val response = try { request(address, "/api/pairing/claims", caDer, null, "POST", body,
+            expectedServerSha256 = expectedServerSha256) }
+        catch (error: ConnectionException.HttpFailure) {
+            if (error.status == 401 || error.status == 410) throw ConnectionException.PairingExpired
+            throw error
+        }
+        val identity = JSONObject(response.toString(Charsets.UTF_8)).optString("attempt_id")
+        if (!identity.matches(Regex("[A-Za-z0-9_-]{16,100}"))) throw ConnectionException.InvalidServerResponse
+        return identity
+    }
+
+    fun qrPairingResult(address: String, caDer: ByteArray, expectedServerSha256: String,
+                        identity: String, pollKey: String): Pair<String, String?> {
+        val response = request(address, "/api/pairing/claims/${encodePathSegment(identity)}", caDer,
+            null, "GET", null, extraHeaders = mapOf("X-Pairing-Poll-Key" to pollKey),
+            expectedServerSha256 = expectedServerSha256)
+        val json = JSONObject(response.toString(Charsets.UTF_8))
+        val state = json.optString("state")
+        if (state == "rejected") throw ConnectionException.PairingRejected
+        if (state == "expired") throw ConnectionException.PairingExpired
+        val token = json.optString("token").takeIf { it.isNotBlank() }
+        return state to token
     }
 
     fun verifySession(address: String, caDer: ByteArray, token: String) {
@@ -284,6 +313,8 @@ class DevDropHttpClient {
         method: String,
         body: ByteArray?,
         readBody: Boolean = true,
+        extraHeaders: Map<String, String> = emptyMap(),
+        expectedServerSha256: String? = null,
     ): ByteArray {
         val base = ServerAddress.normalize(address) ?: throw ConnectionException.InvalidAddress
         var connection: HttpsURLConnection? = null
@@ -301,6 +332,7 @@ class DevDropHttpClient {
             connection.setRequestProperty("Accept", "application/json")
             connection.setRequestProperty("User-Agent", "Dev-Drop-Android/${com.devdrop.android.BuildConfig.VERSION_NAME}")
             if (token != null) connection.setRequestProperty("Authorization", "Bearer $token")
+            extraHeaders.forEach { (name, value) -> connection.setRequestProperty(name, value) }
             if (body != null) {
                 connection.doOutput = true
                 connection.setRequestProperty("Content-Type", "application/json; charset=utf-8")
@@ -308,6 +340,11 @@ class DevDropHttpClient {
                 connection.outputStream.use { it.write(body) }
             }
             val status = connection.responseCode
+            expectedServerSha256?.let { expected ->
+                val actual = MessageDigest.getInstance("SHA-256").digest(connection.serverCertificates.first().encoded)
+                    .joinToString("") { "%02x".format(it) }
+                if (!actual.equals(expected, ignoreCase = true)) throw ConnectionException.TlsIdentity
+            }
             if (status !in 200..299) {
                 connection.errorStream?.close()
                 throw mapHttpError(status, token != null, method == "POST" && path == "/api/pair")
